@@ -123,7 +123,32 @@ function detectDirection(
   const tolerance = Math.max(2.5, median(items.map((item) => item.fontSize)) * 0.48);
   const xBands = countCoordinateBands(items.map((item) => item.x), tolerance);
   const yBands = countCoordinateBands(items.map((item) => item.y), tolerance);
-  return xBands < yBands * 0.8 ? "vertical" : "horizontal";
+  const cjkItems = items.filter((item) =>
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(item.text),
+  );
+  const verticalGlyphRatio = cjkItems.length === 0
+    ? 0
+    : cjkItems.filter((item) => {
+        if (Array.from(item.text.trim()).length !== 1) return false;
+        const width = Math.max(Math.abs(item.width), 1);
+        const height = Math.max(Math.abs(item.height), 1);
+        return Math.max(width, height) / Math.min(width, height) <= 1.4;
+      }).length / cjkItems.length;
+  const horizontalRunRatio = cjkItems.length === 0
+    ? 0
+    : cjkItems.filter((item) =>
+        Array.from(item.text.trim()).length > 1 ||
+        Math.abs(item.width) > Math.max(Math.abs(item.height) * 1.4, item.fontSize * 1.4),
+      ).length / cjkItems.length;
+
+  if (xBands < yBands * 0.8) return "vertical";
+  if (horizontalRunRatio >= 0.6) return "horizontal";
+
+  const coordinateBandsAreBalanced =
+    Math.abs(xBands - yBands) <= Math.max(2, Math.max(xBands, yBands) * 0.2);
+  if (coordinateBandsAreBalanced && verticalGlyphRatio >= 0.6) return "vertical";
+
+  return "horizontal";
 }
 
 function makeBlocks(

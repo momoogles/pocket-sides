@@ -127,6 +127,19 @@ export async function createLocalOcrReader(
                   xMax: line.bbox.x1 / OCR_SCALE,
                   yMax: pageViewport.height - line.bbox.y0 / OCR_SCALE,
                 };
+            const wordCenterBounds = lineWordCenterBounds(
+              line,
+              direction,
+              pageWidthPixels,
+              pageViewport.height,
+            );
+            if (wordCenterBounds && direction === "vertical") {
+              recognitionBounds.xMin = wordCenterBounds.min;
+              recognitionBounds.xMax = wordCenterBounds.max;
+            } else if (wordCenterBounds) {
+              recognitionBounds.yMin = wordCenterBounds.min;
+              recognitionBounds.yMax = wordCenterBounds.max;
+            }
             if (isMarginalPageNumber(line.text, x, y, pageViewport.width, pageViewport.height, pageNumber)) {
               return [];
             }
@@ -228,6 +241,27 @@ function collectLines(blocks: OcrTextBlock[]): OcrLine[] {
   return lines;
 }
 
+function lineWordCenterBounds(
+  line: OcrLine,
+  direction: ReadingDirection,
+  pageWidthPixels: number,
+  pageHeight: number,
+): { min: number; max: number } | undefined {
+  const words = (line.words ?? []).filter((word) => word.text.trim().length > 0);
+  if (words.length === 0) return undefined;
+
+  const centers = words.map((word) => {
+    const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
+    return direction === "vertical"
+      ? (pageWidthPixels - centerY) / OCR_SCALE
+      : pageHeight - centerY / OCR_SCALE;
+  });
+  return {
+    min: Math.min(...centers),
+    max: Math.max(...centers),
+  };
+}
+
 function removeMarginalPageNumber(
   line: OcrLine,
   pageNumber: number,
@@ -244,7 +278,7 @@ function removeMarginalPageNumber(
   );
   const pageNumberWord = boundaryWords.find((word) => {
     const normalized = word.text.normalize("NFKC").replace(/[\s\u3000]/gu, "");
-    if (!/^\d{1,4}$/u.test(normalized) || Number(normalized) !== pageNumber) return false;
+    if (!isPageNumberToken(normalized, pageNumber)) return false;
 
     const centerX = (word.bbox.x0 + word.bbox.x1) / 2;
     const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
@@ -254,7 +288,7 @@ function removeMarginalPageNumber(
     const y = direction === "vertical"
       ? pageHeight - centerX / OCR_SCALE
       : pageHeight - centerY / OCR_SCALE;
-    return isMarginalPageNumber(word.text, x, y, pageWidth, pageHeight, pageNumber);
+    return isNearPageEdge(x, y, pageWidth, pageHeight);
   });
   if (!pageNumberWord) return line;
 
@@ -264,7 +298,7 @@ function removeMarginalPageNumber(
   const prefix = prefixPattern.exec(line.text);
   const isLastWord = words.at(-1) === pageNumberWord;
   const match = isLastWord ? suffix : prefix;
-  if (!match || Number(match[0].normalize("NFKC").trim()) !== pageNumber) return line;
+  if (!match || !isPageNumberToken(match[0].normalize("NFKC").trim(), pageNumber)) return line;
 
   const cleanedText = (isLastWord
     ? line.text.slice(0, match.index)
@@ -283,6 +317,29 @@ function removeMarginalPageNumber(
     { ...remainingWords[0]!.bbox },
   );
   return { ...line, text: cleanedText, words: remainingWords, bbox };
+}
+
+function isPageNumberToken(value: string, pageNumber: number): boolean {
+  if (!/^\d{1,4}$/u.test(value)) return false;
+  if (Number(value) === pageNumber) return true;
+
+  const expected = String(pageNumber);
+  return value.length < expected.length &&
+    (expected.startsWith(value) || expected.endsWith(value));
+}
+
+function isNearPageEdge(
+  x: number,
+  y: number,
+  pageWidth: number,
+  pageHeight: number,
+): boolean {
+  const horizontalMargin = pageWidth * 0.15;
+  const verticalMargin = pageHeight * 0.15;
+  return x <= horizontalMargin ||
+    x >= pageWidth - horizontalMargin ||
+    y <= verticalMargin ||
+    y >= pageHeight - verticalMargin;
 }
 
 const OCR_ROLE_NAME_CHARACTER = String.raw`(?:(?![\u3400-\u4dbf])[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー])`;

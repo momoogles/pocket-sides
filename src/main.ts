@@ -730,8 +730,8 @@ function renderHome(): string {
     <main class="home-page">
       <div class="home-grid">
         <section class="hero-copy">
-          <h1><span>台本をひらいて、</span><span>シーンを練習する</span></h1>
-          <p class="hero-lead">自分のセリフを隠して、シーンごとに練習できます。</p>
+          <h1><span>台本をひらいて、</span><span>シーンごとに練習しよう</span></h1>
+          <p class="hero-lead">前のセリフやト書きを読みながら、自分のセリフを思い出して答え合わせできます。</p>
         </section>
         <div class="upload-card" id="drop-zone">
           <p class="upload-label">台本PDFを読み取る</p>

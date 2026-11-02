@@ -40,7 +40,7 @@ export interface SourceBlock {
   isSpeakerSuffix?: boolean;
   /** OCR confidence from 0 to 100 when this block came from image recognition. */
   recognitionConfidence?: number;
-  /** The recognized rectangle in PDF points, used to reject OCR spanning multiple columns. */
+  /** OCR word-center span on the cross axis, used to reject lines spanning multiple columns. */
   recognitionBounds?: { xMin: number; yMin: number; xMax: number; yMax: number };
 }
 

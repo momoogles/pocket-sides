@@ -42,7 +42,7 @@ export function mergeReadableSourceText(sourceText: string, recognizedText: stri
       const sourceCharacter = source[sourceIndex] ?? "";
       const cellIndex = sourceIndex * width + recognizedIndex;
       if (
-        !isUnreadableCharacter(sourceCharacter) &&
+        isAlignmentAnchor(sourceCharacter) &&
         sourceCharacter === recognized[recognizedIndex]
       ) {
         commonLength[cellIndex] = 1 + commonLength[(sourceIndex + 1) * width + recognizedIndex + 1];
@@ -61,7 +61,7 @@ export function mergeReadableSourceText(sourceText: string, recognizedText: stri
   while (sourceIndex < source.length && recognizedIndex < recognized.length) {
     const sourceCharacter = source[sourceIndex] ?? "";
     if (
-      !isUnreadableCharacter(sourceCharacter) &&
+      isAlignmentAnchor(sourceCharacter) &&
       sourceCharacter === recognized[recognizedIndex]
     ) {
       anchors.push({ sourceIndex, recognizedIndex });
@@ -83,24 +83,38 @@ export function mergeReadableSourceText(sourceText: string, recognizedText: stri
   const appendGap = (sourceEnd: number, recognizedEnd: number) => {
     const sourceGap = source.slice(sourceStart, sourceEnd);
     const recognizedGap = recognized.slice(recognizedStart, recognizedEnd);
+    const recognizedCharacters = recognizedGap
+      .map((character, index) => ({ character, index }))
+      .filter(({ character }) => !/\s/u.test(character));
+    const sourceCharacterPositions = new Map(
+      sourceGap
+        .map((character, index) => ({ character, index }))
+        .filter(({ character }) => !/\s/u.test(character))
+        .map(({ index }, position) => [index, position]),
+    );
     const replacements = new Map<number, number>();
     const usedRecognizedIndexes = new Set<number>();
 
     sourceGap.forEach((character, sourceOffset) => {
-      if (!isUnreadableCharacter(character) || recognizedGap.length === 0) return;
+      if (!isUnreadableCharacter(character) || recognizedCharacters.length === 0) return;
+      const sourceCharacterPosition = sourceCharacterPositions.get(sourceOffset);
+      if (sourceCharacterPosition === undefined) return;
 
       const idealIndex = Math.max(
         0,
         Math.min(
-          recognizedGap.length - 1,
-          Math.round(((sourceOffset + 0.5) * recognizedGap.length) / sourceGap.length - 0.5),
+          recognizedCharacters.length - 1,
+          Math.round(
+            ((sourceCharacterPosition + 0.5) * recognizedCharacters.length) /
+              sourceCharacterPositions.size - 0.5,
+          ),
         ),
       );
       let bestIndex = -1;
       let bestDistance = Number.POSITIVE_INFINITY;
-      recognizedGap.forEach((_, recognizedOffset) => {
+      recognizedCharacters.forEach(({ index: recognizedOffset }, candidateIndex) => {
         if (usedRecognizedIndexes.has(recognizedOffset)) return;
-        const distance = Math.abs(recognizedOffset - idealIndex);
+        const distance = Math.abs(candidateIndex - idealIndex);
         if (distance < bestDistance) {
           bestDistance = distance;
           bestIndex = recognizedOffset;
@@ -209,6 +223,10 @@ function isUnreadableCharacter(character: string): boolean {
     (codePoint >= 0xf0000 && codePoint <= 0xffffd) ||
     (codePoint >= 0x100000 && codePoint <= 0x10fffd)
   );
+}
+
+function isAlignmentAnchor(character: string): boolean {
+  return !isUnreadableCharacter(character) && !/\s/u.test(character);
 }
 
 function contextAround(value: string, target: string): string {
