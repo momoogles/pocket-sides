@@ -11,7 +11,9 @@ import { normalizeScriptText } from "./corrections";
 const SAFE_NAME_CHARACTER = String.raw`(?:(?![\u3400-\u4dbf])[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー・])`;
 const NAME_CHARACTERS = new RegExp(`^${SAFE_NAME_CHARACTER}{1,12}$`, "u");
 const SPEAKER_LABEL_CHARACTER = String.raw`(?:${SAFE_NAME_CHARACTER}|[、,，&＆/／])`;
-const OPENING_MARKERS = ["「", "『", "“", '"', ":", "："];
+const OPENING_MARKERS = [
+  "「", "『", "“", '"', ":", "：", "-", "－", "―", "—", "–", "‐", "‑", "−", "─", "━",
+];
 const SPEECH_WITH_STAGE_DIRECTION_MARKERS = new Set(["（", "(", "［", "[", "【"]);
 const CUE_BOUNDARY_MARKERS = new Set(["」", "』", "”", '"', "!", "！", "?", "？", "。", "．", "…"]);
 const NUMBERED_SECTION_HEADING = /^(?:[（(]\s*[〇零一二三四五六七八九十百0-9０-９]+\s*[）)](?:[\p{L}\p{Number}々ヶヵー・\s]{0,24})?|[〇零一二三四五六七八九十百0-9０-９]{1,3}[.．、][\p{L}\p{Number}々ヶヵー・\s]{0,24})$/u;
@@ -135,7 +137,7 @@ export function applyRecoveredQuoteMarkers(
     if (!cue) return block;
 
     let text = block.text;
-    if (recoveredOpeningMarkers.has(cue.marker)) {
+    if (recoveredOpeningMarkers.has(cue.marker) || isAmbiguousSpeakerQuoteMarker(cue.marker)) {
       const leading = cueText.trimStart();
       const leadingOffset = cueText.length - leading.length;
       const markerOffset = leadingOffset + leading.indexOf(cue.marker, cue.name.length);
@@ -146,7 +148,10 @@ export function applyRecoveredQuoteMarkers(
     }
 
     const endingMarker = Array.from(text.trimEnd()).at(-1);
-    if (endingMarker && recoveredClosingMarkers.has(endingMarker)) {
+    if (
+      endingMarker &&
+      (recoveredClosingMarkers.has(endingMarker) || isAmbiguousClosingQuoteMarker(endingMarker))
+    ) {
       const endingOffset = text.lastIndexOf(endingMarker);
       text = text.slice(0, endingOffset) + "」" + text.slice(endingOffset + endingMarker.length);
     }
@@ -791,6 +796,14 @@ function cueMatchesAlias(
 
 function isOpeningMarker(value: string, recoveredOpeningMarkers: ReadonlySet<string>): boolean {
   return OPENING_MARKERS.includes(value) || recoveredOpeningMarkers.has(value);
+}
+
+function isAmbiguousSpeakerQuoteMarker(value: string): boolean {
+  return /[|｜│┃︱︳∣丨:：－―—–‐‑−─━-]/u.test(value);
+}
+
+function isAmbiguousClosingQuoteMarker(value: string): boolean {
+  return /[|｜│┃︱︳∣丨:：]/u.test(value);
 }
 
 function strongerEvidence(

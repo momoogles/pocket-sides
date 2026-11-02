@@ -1,5 +1,5 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { normalizeOcrPunctuation, normalizeScriptText } from "./corrections";
+import { normalizeScriptPunctuation, normalizeScriptText } from "./corrections";
 import { isMarginalPageNumber } from "./layout";
 import {
   OCR_RECOGNITION_VERSION,
@@ -146,7 +146,7 @@ export async function createLocalOcrReader(
             const speakerLabel = direction === "vertical"
               ? findOcrSpeakerLabel(line)
               : undefined;
-            const normalizedText = normalizeOcrPunctuation(line.text, speakerLabel);
+            const normalizedText = normalizeScriptPunctuation(line.text, speakerLabel);
             const text = speakerLabel && normalizedText.startsWith(speakerLabel)
               ? normalizedText.slice(speakerLabel.length).trimStart()
               : normalizedText;
@@ -350,6 +350,7 @@ const OCR_ROLE_LABEL_CHARACTER =
   String.raw`[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー・、,，&＆/／]`;
 const OCR_OPENING_MARKERS = new Set([
   "「", "『", "“", '\"', ":", "：", "|", "｜", "│", "┃", "︱", "︳", "∣", "丨",
+  "-", "－", "―", "—", "–", "‐", "‑", "−", "─", "━",
 ]);
 
 function findOcrSpeakerLabel(line: OcrLine): string | undefined {

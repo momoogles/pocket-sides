@@ -30,9 +30,12 @@ import {
 import {
   applyCharacterCorrections,
   findUnusualCharacters,
+  inferDocumentCharacterCorrections,
   mergeReadableSourceText,
-  normalizeOcrPunctuation,
+  normalizeScriptPunctuation,
   normalizeScriptText,
+  startsWithUnreadableCharacter,
+  type CharacterMappingEvidence,
 } from "./pdf/corrections";
 import {
   blockPosition,
@@ -417,7 +420,12 @@ function pageRequiresOcr(page: SourcePage): boolean {
   );
 }
 
-function mergeRecognizedPage(sourcePage: SourcePage, recognizedPage: SourcePage): SourcePage {
+function mergeRecognizedPage(
+  sourcePage: SourcePage,
+  recognizedPage: SourcePage,
+  characterMappingEvidence?: CharacterMappingEvidence[],
+  characterCorrections: Readonly<Record<string, string>> = {},
+): SourcePage {
   if (sourcePage.blocks.length === 0) {
     return {
       ...recognizedPage,
@@ -459,27 +467,50 @@ function mergeRecognizedPage(sourcePage: SourcePage, recognizedPage: SourcePage)
     const recognizedBlock = availableLines.splice(bestIndex, 1)[0];
     if (!recognizedBlock) return sourceBlock;
     replacedBlockCount += 1;
-    const sourceSpeakerLabel = sourceBlock.speakerLabel ?? cueAtStart(sourceBlock.text, recoveredOpeningMarkers)?.name;
-    const speakerLabel = sourceSpeakerLabel ?? recognizedBlock.speakerLabel;
-    const sourceText = !sourceBlock.speakerLabel && sourceSpeakerLabel &&
-      sourceBlock.text.startsWith(sourceSpeakerLabel)
-      ? sourceBlock.text.slice(sourceSpeakerLabel.length).trimStart()
-      : sourceBlock.text;
+    const correctedSourceBlock = applyCharacterCorrections([sourceBlock], characterCorrections)[0] ?? sourceBlock;
+    const sourceSpeakerLabel = correctedSourceBlock.speakerLabel ??
+      cueAtStart(correctedSourceBlock.text, recoveredOpeningMarkers)?.name ??
+      (startsWithUnreadableCharacter(correctedSourceBlock.text) ? recognizedBlock.speakerLabel : undefined);
+    const speakerLabel = sourceSpeakerLabel;
+    const sourceText = !correctedSourceBlock.speakerLabel && sourceSpeakerLabel &&
+      correctedSourceBlock.text.startsWith(sourceSpeakerLabel)
+      ? correctedSourceBlock.text.slice(sourceSpeakerLabel.length).trimStart()
+      : correctedSourceBlock.text;
     const recognizedTextSource = sourceSpeakerLabel && recognizedBlock.speakerLabel
       ? recognizedBlock.text
       : recognizedBlock.rawText;
-    const normalizedRecognizedText = normalizeOcrPunctuation(recognizedTextSource, speakerLabel);
+    const normalizedRecognizedText = normalizeScriptPunctuation(recognizedTextSource, speakerLabel);
     const recognizedText = normalizeScriptText(sourceSpeakerLabel
       ? stripDuplicateSpeakerCue(normalizedRecognizedText, sourceSpeakerLabel, recoveredOpeningMarkers)
       : normalizedRecognizedText);
-    const mergedTextWithCue = mergeReadableSourceText(sourceText, recognizedText);
+    const onCharacterMapping = characterMappingEvidence &&
+      (recognizedBlock.recognitionConfidence ?? 0) >= 60
+      ? (sourceCharacter: string, recognizedCharacter: string) => {
+          characterMappingEvidence.push({
+            sourceCharacter,
+            recognizedCharacter,
+            pageNumber: sourcePage.pageNumber,
+            blockId: sourceBlock.id,
+          });
+        }
+      : undefined;
+    const mergedTextWithCue = mergeReadableSourceText(
+      sourceText,
+      recognizedText,
+      onCharacterMapping,
+      characterCorrections,
+    );
     const mergedText = normalizeScriptText(speakerLabel
       ? stripDuplicateSpeakerCue(mergedTextWithCue, speakerLabel, recoveredOpeningMarkers)
       : mergedTextWithCue);
-    const mergedRawText = normalizeScriptText(mergeReadableSourceText(
-      sourceBlock.rawText,
-      normalizeOcrPunctuation(recognizedBlock.rawText, speakerLabel),
-    ));
+    const mergedRawText = normalizeScriptText(speakerLabel
+      ? `${speakerLabel}${mergedTextWithCue}`
+      : mergeReadableSourceText(
+          correctedSourceBlock.rawText,
+          normalizeScriptPunctuation(recognizedBlock.rawText, speakerLabel),
+          undefined,
+          characterCorrections,
+        ));
 
     return {
       ...recognizedBlock,
@@ -492,7 +523,7 @@ function mergeRecognizedPage(sourcePage: SourcePage, recognizedPage: SourcePage)
       visualGapAfter: sourceBlock.visualGapAfter,
       rawText: mergedRawText,
       text: mergedText,
-      ...(speakerLabel ? { speakerLabel } : {}),
+      speakerLabel,
       ...(sourceBlock.speakerAliases
         ? { speakerAliases: sourceBlock.speakerAliases }
         : {}),
@@ -1729,7 +1760,10 @@ async function readWithOcr(): Promise<void> {
   let reader: Awaited<ReturnType<typeof createLocalOcrReader>> | null = null;
   let replacedPages = 0;
   const failedPages: number[] = [];
+  const characterMappingEvidence: CharacterMappingEvidence[] = [];
   const updatedPages = [...state.pages];
+  const candidateSourcePages = new Map(candidates.map((page) => [page.pageNumber, page]));
+  const recognizedPages = new Map<number, SourcePage>();
 
   try {
     reader = await createLocalOcrReader((progress: OcrProgress) => {
@@ -1748,7 +1782,12 @@ async function readWithOcr(): Promise<void> {
           sourcePage.pageNumber,
           sourcePage.direction,
         );
-        const mergedPage = mergeRecognizedPage(sourcePage, recognizedPage);
+        recognizedPages.set(sourcePage.pageNumber, recognizedPage);
+        const mergedPage = mergeRecognizedPage(
+          sourcePage,
+          recognizedPage,
+          characterMappingEvidence,
+        );
         if (mergedPage === sourcePage) {
           failedPages.push(sourcePage.pageNumber);
         } else {
@@ -1765,8 +1804,15 @@ async function readWithOcr(): Promise<void> {
     }
 
     if (replacedPages > 0) {
-      state.pages = updatedPages;
-      state.corrections = {};
+      const inferredCorrections = inferDocumentCharacterCorrections(characterMappingEvidence);
+      state.pages = updatedPages.map((page) => {
+        const sourcePage = candidateSourcePages.get(page.pageNumber);
+        const recognizedPage = recognizedPages.get(page.pageNumber);
+        return sourcePage && recognizedPage
+          ? mergeRecognizedPage(sourcePage, recognizedPage, undefined, inferredCorrections)
+          : page;
+      });
+      state.corrections = inferredCorrections;
       state.manualSpeakers = {};
       state.ranges = {};
       state.currentTargetIndex = 0;
