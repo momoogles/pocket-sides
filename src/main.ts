@@ -31,6 +31,7 @@ import {
   applyCharacterCorrections,
   findUnusualCharacters,
   mergeReadableSourceText,
+  normalizeOcrPunctuation,
   normalizeScriptText,
 } from "./pdf/corrections";
 import {
@@ -41,6 +42,8 @@ import {
   detectRoleCandidates,
   getSpeakerTurns,
   hasEnoughText,
+  applyRecoveredQuoteMarkers,
+  inferRecoveredClosingMarkers,
   inferRecoveredOpeningMarkers,
   isCastListEntry,
   isPlausibleSpeakerLabel,
@@ -189,6 +192,7 @@ let cachedPracticeTargets: {
   value: PracticeTarget[];
 } | null = null;
 let recoveredOpeningMarkers = new Set<string>();
+let recoveredClosingMarkers = new Set<string>();
 
 function notify(message: string, tone: NotificationTone = "info"): void {
   if (notificationTimer !== null) window.clearTimeout(notificationTimer);
@@ -212,6 +216,17 @@ function rawBlocks(): SourceBlock[] {
   return collectBlocks(state.pages);
 }
 
+function inferredMarkerCorrections(): Record<string, string> {
+  const corrections: Record<string, string> = {};
+  for (const marker of recoveredOpeningMarkers) {
+    if (!recoveredClosingMarkers.has(marker)) corrections[marker] = "「";
+  }
+  for (const marker of recoveredClosingMarkers) {
+    if (!recoveredOpeningMarkers.has(marker)) corrections[marker] = "」";
+  }
+  return corrections;
+}
+
 function blocks(): SourceBlock[] {
   const roleCandidates = usableRoleCandidates();
   const roleSignature = JSON.stringify(roleCandidates.map(({ id, label, aliases, manual }) => [id, label, aliases, manual]));
@@ -225,8 +240,13 @@ function blocks(): SourceBlock[] {
 
   const sourceBlocks = rawBlocks();
   recoveredOpeningMarkers = inferRecoveredOpeningMarkers(sourceBlocks);
+  recoveredClosingMarkers = inferRecoveredClosingMarkers(sourceBlocks, recoveredOpeningMarkers);
   const corrected = applySeparatedLatinRoleSuffixes(
-    applyCharacterCorrections(sourceBlocks, state.corrections).map((block) => {
+    applyRecoveredQuoteMarkers(
+      applyCharacterCorrections(sourceBlocks, state.corrections),
+      recoveredOpeningMarkers,
+      recoveredClosingMarkers,
+    ).map((block) => {
       if (isStageDirectionBlock(block, roleCandidates)) {
         const label = block.speakerLabel?.trim();
         const text = block.text.trimStart();
@@ -448,16 +468,17 @@ function mergeRecognizedPage(sourcePage: SourcePage, recognizedPage: SourcePage)
     const recognizedTextSource = sourceSpeakerLabel && recognizedBlock.speakerLabel
       ? recognizedBlock.text
       : recognizedBlock.rawText;
+    const normalizedRecognizedText = normalizeOcrPunctuation(recognizedTextSource, speakerLabel);
     const recognizedText = normalizeScriptText(sourceSpeakerLabel
-      ? stripDuplicateSpeakerCue(recognizedTextSource, sourceSpeakerLabel, recoveredOpeningMarkers)
-      : recognizedTextSource);
+      ? stripDuplicateSpeakerCue(normalizedRecognizedText, sourceSpeakerLabel, recoveredOpeningMarkers)
+      : normalizedRecognizedText);
     const mergedTextWithCue = mergeReadableSourceText(sourceText, recognizedText);
     const mergedText = normalizeScriptText(speakerLabel
       ? stripDuplicateSpeakerCue(mergedTextWithCue, speakerLabel, recoveredOpeningMarkers)
       : mergedTextWithCue);
     const mergedRawText = normalizeScriptText(mergeReadableSourceText(
       sourceBlock.rawText,
-      normalizeScriptText(recognizedBlock.rawText),
+      normalizeOcrPunctuation(recognizedBlock.rawText, speakerLabel),
     ));
 
     return {
@@ -794,7 +815,10 @@ function renderStepHeader(heading: string, description: string): string {
 function renderAnalysis(): string {
   const textBlocks = blocks();
   const characterCount = textBlocks.reduce((sum, block) => sum + block.text.length, 0);
-  const allGlyphs = findUnusualCharacters(rawBlocks(), state.corrections);
+  const allGlyphs = findUnusualCharacters(rawBlocks(), {
+    ...inferredMarkerCorrections(),
+    ...state.corrections,
+  });
   const ocrPageCount = state.pages.filter(isOcrRecognizedPage).length;
   const ocrCandidateCount = pagesNeedingOcr().length;
   const foundTurns = turns();
@@ -1915,6 +1939,7 @@ async function closePdf(): Promise<void> {
   cachedSpeakerTurns = null;
   cachedPracticeTargets = null;
   recoveredOpeningMarkers = new Set();
+  recoveredClosingMarkers = new Set();
   state.currentTargetIndex = 0;
   state.revealed = false;
   state.showOriginal = false;

@@ -23,6 +23,29 @@ export function normalizeScriptText(value: string): string {
     .replace(/[!！](?:\s*[!！])+/gu, "！");
 }
 
+export function normalizeOcrPunctuation(value: string, speakerLabel?: string): string {
+  let normalized = normalizeScriptText(value);
+  const label = speakerLabel ? normalizeScriptText(speakerLabel) : "";
+
+  if (label && normalized.startsWith(label)) {
+    let markerIndex = label.length;
+    while (/\s/u.test(normalized[markerIndex] ?? "")) markerIndex += 1;
+    const marker = Array.from(normalized.slice(markerIndex))[0] ?? "";
+    if (isVerticalStrokeMarker(marker)) {
+      normalized = `${normalized.slice(0, markerIndex)}「${normalized.slice(markerIndex + marker.length)}`;
+    }
+  }
+
+  const japaneseCharacter = String.raw`[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ]`;
+  const verticalStrokes = String.raw`[|｜│┃︱︳∣丨]`;
+  return normalized
+    .replace(/[~～]/gu, "〜")
+    .replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ])\s+(?=〜)/gu, "$1")
+    .replace(/〜\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ])/gu, "〜")
+    .replace(new RegExp(`(${japaneseCharacter})\\s*${verticalStrokes}\\s*(?=${japaneseCharacter})`, "gu"), "$1ー")
+    .replace(new RegExp(`(ー)\\s*${verticalStrokes}\\s*(?=[…⋯])`, "gu"), "$1");
+}
+
 /** Keeps readable PDF characters and uses OCR to fill text extraction failures. */
 export function mergeReadableSourceText(sourceText: string, recognizedText: string): string {
   const source = Array.from(sourceText);
@@ -96,7 +119,10 @@ export function mergeReadableSourceText(sourceText: string, recognizedText: stri
     const usedRecognizedIndexes = new Set<number>();
 
     sourceGap.forEach((character, sourceOffset) => {
-      if (!isUnreadableCharacter(character) || recognizedCharacters.length === 0) return;
+      if (
+        !isReplaceableSourceCharacter(source, sourceStart + sourceOffset) ||
+        recognizedCharacters.length === 0
+      ) return;
       const sourceCharacterPosition = sourceCharacterPositions.get(sourceOffset);
       if (sourceCharacterPosition === undefined) return;
 
@@ -110,16 +136,29 @@ export function mergeReadableSourceText(sourceText: string, recognizedText: stri
           ),
         ),
       );
+      const embeddedStrokeContext = hasJapaneseNeighbors(source, sourceStart + sourceOffset);
       let bestIndex = -1;
       let bestDistance = Number.POSITIVE_INFINITY;
-      recognizedCharacters.forEach(({ index: recognizedOffset }, candidateIndex) => {
-        if (usedRecognizedIndexes.has(recognizedOffset)) return;
-        const distance = Math.abs(candidateIndex - idealIndex);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestIndex = recognizedOffset;
-        }
-      });
+      if (embeddedStrokeContext) {
+        recognizedCharacters.forEach(({ character, index }, candidateIndex) => {
+          if (character !== "ー" || usedRecognizedIndexes.has(index)) return;
+          const distance = Math.abs(candidateIndex - idealIndex);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = index;
+          }
+        });
+      }
+      if (bestIndex < 0) {
+        recognizedCharacters.forEach(({ index: recognizedOffset }, candidateIndex) => {
+          if (usedRecognizedIndexes.has(recognizedOffset)) return;
+          const distance = Math.abs(candidateIndex - idealIndex);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = recognizedOffset;
+          }
+        });
+      }
       if (bestIndex >= 0) {
         replacements.set(sourceOffset, bestIndex);
         usedRecognizedIndexes.add(bestIndex);
@@ -127,15 +166,26 @@ export function mergeReadableSourceText(sourceText: string, recognizedText: stri
     });
 
     sourceGap.forEach((character, sourceOffset) => {
-      if (!isUnreadableCharacter(character)) {
+      const sourceCharacterIndex = sourceStart + sourceOffset;
+      if (!isReplaceableSourceCharacter(source, sourceCharacterIndex)) {
         merged += character;
         return;
       }
 
       const replacementIndex = replacements.get(sourceOffset);
       if (replacementIndex !== undefined) {
-        merged += recognizedGap[replacementIndex] ?? "";
-      } else if (recognizedGap.length === 0) {
+        const replacementCharacter = recognizedGap[replacementIndex] ?? "";
+        const embeddedStrokeContext = hasJapaneseNeighbors(source, sourceCharacterIndex);
+        if (isUnreadableCharacter(character)) {
+          merged += embeddedStrokeContext && isVerticalStrokeCharacter(replacementCharacter)
+            ? "ー"
+            : replacementCharacter;
+        } else if (embeddedStrokeContext && replacementCharacter === "ー") {
+          merged += "ー";
+        } else {
+          merged += character;
+        }
+      } else if (!isUnreadableCharacter(character) || recognizedGap.length === 0) {
         merged += character;
       }
     });
@@ -227,6 +277,46 @@ function isUnreadableCharacter(character: string): boolean {
 
 function isAlignmentAnchor(character: string): boolean {
   return !isUnreadableCharacter(character) && !/\s/u.test(character);
+}
+
+function isReplaceableSourceCharacter(source: string[], index: number): boolean {
+  const character = source[index] ?? "";
+  if (isUnreadableCharacter(character)) return true;
+  return isLineStrokeCharacter(character) && hasJapaneseNeighbors(source, index);
+}
+
+function isLineStrokeCharacter(character: string): boolean {
+  return /[|｜│┃︱︳∣丨ー―—–‐‑−─━-]/u.test(character);
+}
+
+function isVerticalStrokeCharacter(character: string): boolean {
+  return /[|｜│┃︱︳∣丨]/u.test(character);
+}
+
+function hasJapaneseNeighbors(source: string[], index: number): boolean {
+  const previous = adjacentNonWhitespaceCharacter(source, index, -1);
+  const next = adjacentNonWhitespaceCharacter(source, index, 1);
+  return isJapaneseScriptCharacter(previous) && isJapaneseScriptCharacter(next);
+}
+
+function adjacentNonWhitespaceCharacter(
+  source: string[],
+  index: number,
+  step: -1 | 1,
+): string {
+  for (let cursor = index + step; cursor >= 0 && cursor < source.length; cursor += step) {
+    const character = source[cursor] ?? "";
+    if (!/\s/u.test(character)) return character;
+  }
+  return "";
+}
+
+function isJapaneseScriptCharacter(character: string): boolean {
+  return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ]/u.test(character);
+}
+
+function isVerticalStrokeMarker(character: string): boolean {
+  return /[|｜│┃︱︳∣丨]/u.test(character);
 }
 
 function contextAround(value: string, target: string): string {

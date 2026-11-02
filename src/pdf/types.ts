@@ -1,7 +1,7 @@
 export type ReadingDirection = "vertical" | "horizontal";
 export type RoleEvidence = "quotation" | "layout" | "recovered" | "manual";
 
-export const OCR_RECOGNITION_VERSION = 5;
+export const OCR_RECOGNITION_VERSION = 6;
 
 export interface SourceItem {
   id: string;

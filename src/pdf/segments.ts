@@ -47,7 +47,7 @@ export function collectBlocks(pages: SourcePage[]): SourceBlock[] {
   return pages.flatMap((page) => page.blocks);
 }
 
-/** Infers corrupted opening-quote glyphs from repeated cue-like layouts in this PDF. */
+/** Infers opening quote glyphs from repeated speaker-cue structure. */
 export function inferRecoveredOpeningMarkers(blocks: SourceBlock[]): Set<string> {
   const glyphTotals = new Map<string, number>();
   const cueCounts = new Map<string, Map<string, number>>();
@@ -55,14 +55,14 @@ export function inferRecoveredOpeningMarkers(blocks: SourceBlock[]): Set<string>
   for (const block of blocks) {
     const characters = Array.from((block.rawText || block.text).trimStart());
     for (const character of characters) {
-      if (isCjkExtensionCharacter(character)) {
+      if (isPotentialQuoteMarker(character)) {
         glyphTotals.set(character, (glyphTotals.get(character) ?? 0) + 1);
       }
     }
 
     for (let markerIndex = 1; markerIndex < Math.min(characters.length, 13); markerIndex += 1) {
       const marker = characters[markerIndex];
-      if (!marker || !isCjkExtensionCharacter(marker)) continue;
+      if (!marker || !isPotentialQuoteMarker(marker)) continue;
 
       const label = characters.slice(0, markerIndex).join("").trim();
       const followingText = characters.slice(markerIndex + 1).join("");
@@ -85,6 +85,74 @@ export function inferRecoveredOpeningMarkers(blocks: SourceBlock[]): Set<string>
     }
   }
   return recovered;
+}
+
+export function inferRecoveredClosingMarkers(
+  blocks: SourceBlock[],
+  recoveredOpeningMarkers: ReadonlySet<string> = inferRecoveredOpeningMarkers(blocks),
+): Set<string> {
+  const endingGlyphTotals = new Map<string, number>();
+  const cueCounts = new Map<string, Map<string, number>>();
+
+  for (const block of blocks) {
+    const rawText = (block.rawText || block.text).trimEnd();
+    const marker = Array.from(rawText).at(-1);
+    if (!marker || !isPotentialQuoteMarker(marker)) continue;
+    endingGlyphTotals.set(marker, (endingGlyphTotals.get(marker) ?? 0) + 1);
+
+    const cueText = block.speakerLabel && !rawText.startsWith(block.speakerLabel)
+      ? block.speakerLabel + block.text
+      : rawText;
+    const cue = quotedCueAtStart(cueText, recoveredOpeningMarkers);
+    if (!cue) continue;
+    const labels = cueCounts.get(marker) ?? new Map<string, number>();
+    labels.set(cue.name, (labels.get(cue.name) ?? 0) + 1);
+    cueCounts.set(marker, labels);
+  }
+
+  const recovered = new Set<string>();
+  for (const [marker, labels] of cueCounts) {
+    const total = endingGlyphTotals.get(marker) ?? 0;
+    const cueCount = [...labels.values()].reduce((sum, count) => sum + count, 0);
+    const repeatedLabels = [...labels.values()].filter((count) => count >= 2).length;
+    if (cueCount >= 6 && repeatedLabels >= 2 && cueCount / total >= 0.5) {
+      recovered.add(marker);
+    }
+  }
+  return recovered;
+}
+
+/** Corrects inferred quote glyphs only where speaker cues and dialogue endings support them. */
+export function applyRecoveredQuoteMarkers(
+  blocks: SourceBlock[],
+  recoveredOpeningMarkers: ReadonlySet<string>,
+  recoveredClosingMarkers: ReadonlySet<string>,
+): SourceBlock[] {
+  return blocks.map((block) => {
+    const speakerLabel = block.speakerLabel ?? "";
+    const cueText = speakerLabel ? speakerLabel + block.text : block.text;
+    const cue = quotedCueAtStart(cueText, recoveredOpeningMarkers);
+    if (!cue) return block;
+
+    let text = block.text;
+    if (recoveredOpeningMarkers.has(cue.marker)) {
+      const leading = cueText.trimStart();
+      const leadingOffset = cueText.length - leading.length;
+      const markerOffset = leadingOffset + leading.indexOf(cue.marker, cue.name.length);
+      const textOffset = markerOffset - speakerLabel.length;
+      if (textOffset >= 0 && text[textOffset] === cue.marker) {
+        text = text.slice(0, textOffset) + "「" + text.slice(textOffset + cue.marker.length);
+      }
+    }
+
+    const endingMarker = Array.from(text.trimEnd()).at(-1);
+    if (endingMarker && recoveredClosingMarkers.has(endingMarker)) {
+      const endingOffset = text.lastIndexOf(endingMarker);
+      text = text.slice(0, endingOffset) + "」" + text.slice(endingOffset + endingMarker.length);
+    }
+
+    return text === block.text ? block : { ...block, text };
+  });
 }
 
 export function detectRoleCandidates(blocks: SourceBlock[]): RoleCandidate[] {
@@ -272,7 +340,7 @@ function findInlineSpeakerCues(
   for (let index = 0; index < text.length;) {
     const character = String.fromCodePoint(text.codePointAt(index) ?? 0);
     index += character.length;
-    if (!CUE_BOUNDARY_MARKERS.has(character) && !isCjkExtensionCharacter(character)) continue;
+    if (!CUE_BOUNDARY_MARKERS.has(character) && !isPotentialQuoteMarker(character)) continue;
     const cue = parseKnownSpeakerCue(text, index, roleAliasIndex, recoveredOpeningMarkers);
     if (!cue || cue.start === 0) continue;
     cues.push({ name: cue.name, start: cue.start, markerStart: cue.markerStart, roles: cue.roles });
@@ -390,6 +458,10 @@ function roleAliasAt(
 function isCjkExtensionCharacter(value: string): boolean {
   const codePoint = value.codePointAt(0) ?? 0;
   return codePoint >= 0x3400 && codePoint <= 0x4dbf;
+}
+
+function isPotentialQuoteMarker(value: string): boolean {
+  return isCjkExtensionCharacter(value) || /[|｜│┃︱︳∣丨]/u.test(value);
 }
 
 function isJointSpeakerSeparator(character: string): boolean {
