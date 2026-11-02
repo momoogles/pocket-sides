@@ -1,0 +1,3 @@
+storeDir: ./work/pnpm-store
+allowBuilds:
+  tesseract.js: false

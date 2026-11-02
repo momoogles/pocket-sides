@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:*; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
+    <meta
+      name="description"
+      content="台本PDFから、役ごとにセリフを練習できるWebアプリです。"
+    />
+    <meta name="theme-color" content="#f5f1e8" />
+    <title>おぼえる台本</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/bootstrap.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+public/cmaps/
+public/standard_fonts/
+public/iccs/
+public/wasm/
+public/licenses/
+public/ocr/
+work/
+outputs/
+*.pdf
+*.PDF
+*-screen*.png
+*-source*.png
+*.log
+.DS_Store
