@@ -1,3 +1,4 @@
+import { normalizeScriptText } from "./corrections";
 import type {
   PracticeTarget,
   RoleCandidate,
@@ -6,17 +7,50 @@ import type {
   SourcePage,
   SpeakerTurn,
 } from "./types";
-import { normalizeScriptText } from "./corrections";
 
 const SAFE_NAME_CHARACTER = String.raw`(?:(?![\u3400-\u4dbf])[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー・])`;
 const NAME_CHARACTERS = new RegExp(`^${SAFE_NAME_CHARACTER}{1,12}$`, "u");
 const SPEAKER_LABEL_CHARACTER = String.raw`(?:${SAFE_NAME_CHARACTER}|[、,，&＆/／])`;
 const OPENING_MARKERS = [
-  "「", "『", "“", '"', ":", "：", "-", "－", "―", "—", "–", "‐", "‑", "−", "─", "━",
+  "「",
+  "『",
+  "“",
+  '"',
+  ":",
+  "：",
+  "-",
+  "－",
+  "―",
+  "—",
+  "–",
+  "‐",
+  "‑",
+  "−",
+  "─",
+  "━",
 ];
-const SPEECH_WITH_STAGE_DIRECTION_MARKERS = new Set(["（", "(", "［", "[", "【"]);
-const CUE_BOUNDARY_MARKERS = new Set(["」", "』", "”", '"', "!", "！", "?", "？", "。", "．", "…"]);
-const NUMBERED_SECTION_HEADING = /^(?:[（(]\s*[〇零一二三四五六七八九十百0-9０-９]+\s*[）)](?:[\p{L}\p{Number}々ヶヵー・\s]{0,24})?|[〇零一二三四五六七八九十百0-9０-９]{1,3}[.．、][\p{L}\p{Number}々ヶヵー・\s]{0,24})$/u;
+const SPEECH_WITH_STAGE_DIRECTION_MARKERS = new Set([
+  "（",
+  "(",
+  "［",
+  "[",
+  "【",
+]);
+const CUE_BOUNDARY_MARKERS = new Set([
+  "」",
+  "』",
+  "”",
+  '"',
+  "!",
+  "！",
+  "?",
+  "？",
+  "。",
+  "．",
+  "…",
+]);
+const NUMBERED_SECTION_HEADING =
+  /^(?:[（(]\s*[〇零一二三四五六七八九十百0-9０-９]+\s*[）)](?:[\p{L}\p{Number}々ヶヵー・\s]{0,24})?|[〇零一二三四五六七八九十百0-9０-９]{1,3}[.．、][\p{L}\p{Number}々ヶヵー・\s]{0,24})$/u;
 
 export interface ScriptTextFragment {
   kind: "speech" | "stage-direction";
@@ -50,7 +84,9 @@ export function collectBlocks(pages: SourcePage[]): SourceBlock[] {
 }
 
 /** Infers opening quote glyphs from repeated speaker-cue structure. */
-export function inferRecoveredOpeningMarkers(blocks: SourceBlock[]): Set<string> {
+export function inferRecoveredOpeningMarkers(
+  blocks: SourceBlock[],
+): Set<string> {
   const glyphTotals = new Map<string, number>();
   const cueCounts = new Map<string, Map<string, number>>();
 
@@ -62,7 +98,11 @@ export function inferRecoveredOpeningMarkers(blocks: SourceBlock[]): Set<string>
       }
     }
 
-    for (let markerIndex = 1; markerIndex < Math.min(characters.length, 13); markerIndex += 1) {
+    for (
+      let markerIndex = 1;
+      markerIndex < Math.min(characters.length, 13);
+      markerIndex += 1
+    ) {
       const marker = characters[markerIndex];
       if (!marker || !isPotentialQuoteMarker(marker)) continue;
 
@@ -80,8 +120,13 @@ export function inferRecoveredOpeningMarkers(blocks: SourceBlock[]): Set<string>
   const recovered = new Set<string>();
   for (const [marker, labels] of cueCounts) {
     const total = glyphTotals.get(marker) ?? 0;
-    const cueCount = [...labels.values()].reduce((sum, count) => sum + count, 0);
-    const repeatedLabels = [...labels.values()].filter((count) => count >= 2).length;
+    const cueCount = [...labels.values()].reduce(
+      (sum, count) => sum + count,
+      0,
+    );
+    const repeatedLabels = [...labels.values()].filter(
+      (count) => count >= 2,
+    ).length;
     if (cueCount >= 6 && repeatedLabels >= 2 && cueCount / total >= 0.5) {
       recovered.add(marker);
     }
@@ -91,7 +136,9 @@ export function inferRecoveredOpeningMarkers(blocks: SourceBlock[]): Set<string>
 
 export function inferRecoveredClosingMarkers(
   blocks: SourceBlock[],
-  recoveredOpeningMarkers: ReadonlySet<string> = inferRecoveredOpeningMarkers(blocks),
+  recoveredOpeningMarkers: ReadonlySet<string> = inferRecoveredOpeningMarkers(
+    blocks,
+  ),
 ): Set<string> {
   const endingGlyphTotals = new Map<string, number>();
   const cueCounts = new Map<string, Map<string, number>>();
@@ -102,9 +149,10 @@ export function inferRecoveredClosingMarkers(
     if (!marker || !isPotentialQuoteMarker(marker)) continue;
     endingGlyphTotals.set(marker, (endingGlyphTotals.get(marker) ?? 0) + 1);
 
-    const cueText = block.speakerLabel && !rawText.startsWith(block.speakerLabel)
-      ? block.speakerLabel + block.text
-      : rawText;
+    const cueText =
+      block.speakerLabel && !rawText.startsWith(block.speakerLabel)
+        ? block.speakerLabel + block.text
+        : rawText;
     const cue = quotedCueAtStart(cueText, recoveredOpeningMarkers);
     if (!cue) continue;
     const labels = cueCounts.get(marker) ?? new Map<string, number>();
@@ -115,8 +163,13 @@ export function inferRecoveredClosingMarkers(
   const recovered = new Set<string>();
   for (const [marker, labels] of cueCounts) {
     const total = endingGlyphTotals.get(marker) ?? 0;
-    const cueCount = [...labels.values()].reduce((sum, count) => sum + count, 0);
-    const repeatedLabels = [...labels.values()].filter((count) => count >= 2).length;
+    const cueCount = [...labels.values()].reduce(
+      (sum, count) => sum + count,
+      0,
+    );
+    const repeatedLabels = [...labels.values()].filter(
+      (count) => count >= 2,
+    ).length;
     if (cueCount >= 6 && repeatedLabels >= 2 && cueCount / total >= 0.5) {
       recovered.add(marker);
     }
@@ -137,23 +190,34 @@ export function applyRecoveredQuoteMarkers(
     if (!cue) return block;
 
     let text = block.text;
-    if (recoveredOpeningMarkers.has(cue.marker) || isAmbiguousSpeakerQuoteMarker(cue.marker)) {
+    if (
+      recoveredOpeningMarkers.has(cue.marker) ||
+      isAmbiguousSpeakerQuoteMarker(cue.marker)
+    ) {
       const leading = cueText.trimStart();
       const leadingOffset = cueText.length - leading.length;
-      const markerOffset = leadingOffset + leading.indexOf(cue.marker, cue.name.length);
+      const markerOffset =
+        leadingOffset + leading.indexOf(cue.marker, cue.name.length);
       const textOffset = markerOffset - speakerLabel.length;
       if (textOffset >= 0 && text[textOffset] === cue.marker) {
-        text = text.slice(0, textOffset) + "「" + text.slice(textOffset + cue.marker.length);
+        text =
+          text.slice(0, textOffset) +
+          "「" +
+          text.slice(textOffset + cue.marker.length);
       }
     }
 
     const endingMarker = Array.from(text.trimEnd()).at(-1);
     if (
       endingMarker &&
-      (recoveredClosingMarkers.has(endingMarker) || isAmbiguousClosingQuoteMarker(endingMarker))
+      (recoveredClosingMarkers.has(endingMarker) ||
+        isAmbiguousClosingQuoteMarker(endingMarker))
     ) {
       const endingOffset = text.lastIndexOf(endingMarker);
-      text = text.slice(0, endingOffset) + "」" + text.slice(endingOffset + endingMarker.length);
+      text =
+        text.slice(0, endingOffset) +
+        "」" +
+        text.slice(endingOffset + endingMarker.length);
     }
 
     return text === block.text ? block : { ...block, text };
@@ -163,8 +227,13 @@ export function applyRecoveredQuoteMarkers(
 export function detectRoleCandidates(blocks: SourceBlock[]): RoleCandidate[] {
   const recoveredOpeningMarkers = inferRecoveredOpeningMarkers(blocks);
   const initial = collectRoleCandidates(blocks, recoveredOpeningMarkers);
-  const expanded = splitInlineSpeakerBlocks(blocks, initial, recoveredOpeningMarkers);
-  const hasExpandedCues = expanded.length !== blocks.length ||
+  const expanded = splitInlineSpeakerBlocks(
+    blocks,
+    initial,
+    recoveredOpeningMarkers,
+  );
+  const hasExpandedCues =
+    expanded.length !== blocks.length ||
     expanded.some((block, index) => block !== blocks[index]);
   const detected = !hasExpandedCues
     ? initial
@@ -186,9 +255,13 @@ function collectRoleCandidates(
     if (existing) {
       existing.role.occurrenceCount += 1;
       existing.pageNumbers.add(block.pageNumber);
-      existing.role.evidence = strongerEvidence(existing.role.evidence, cue.evidence);
+      existing.role.evidence = strongerEvidence(
+        existing.role.evidence,
+        cue.evidence,
+      );
       for (const alias of [cue.name, ...(cue.aliases ?? [])]) {
-        if (!existing.role.aliases.includes(alias)) existing.role.aliases.push(alias);
+        if (!existing.role.aliases.includes(alias))
+          existing.role.aliases.push(alias);
       }
       if (existing.role.exampleBlockIds.length < 4) {
         existing.role.exampleBlockIds.push(block.id);
@@ -212,24 +285,39 @@ function collectRoleCandidates(
 
   const entries = [...candidates.values()];
   const layoutRoles = entries.filter(({ role }) => role.evidence === "layout");
-  const layoutOccurrences = layoutRoles.reduce((sum, { role }) => sum + role.occurrenceCount, 0);
-  const quotationOccurrences = entries.filter(({ role }) => role.evidence === "quotation")
+  const layoutOccurrences = layoutRoles.reduce(
+    (sum, { role }) => sum + role.occurrenceCount,
+    0,
+  );
+  const quotationOccurrences = entries
+    .filter(({ role }) => role.evidence === "quotation")
     .reduce((sum, { role }) => sum + role.occurrenceCount, 0);
-  const usesSpacedLabels = layoutRoles.filter(({ role }) => role.occurrenceCount >= 2).length >= 2 &&
-    layoutOccurrences >= 6 && layoutOccurrences >= quotationOccurrences * 2;
+  const usesSpacedLabels =
+    layoutRoles.filter(({ role }) => role.occurrenceCount >= 2).length >= 2 &&
+    layoutOccurrences >= 6 &&
+    layoutOccurrences >= quotationOccurrences * 2;
 
-  const layoutBlocks = blocks.filter((block) => block.speakerLabel && block.speakerEvidence !== "quotation");
+  const layoutBlocks = blocks.filter(
+    (block) => block.speakerLabel && block.speakerEvidence !== "quotation",
+  );
   const supportedQuotedNames = new Set<string>();
   if (usesSpacedLabels) {
     for (const block of blocks) {
       const cue = cueForBlock(block, recoveredOpeningMarkers);
       if (cue?.evidence !== "quotation") continue;
-      const peers = layoutBlocks.filter((candidate) => candidate.direction === block.direction &&
-        (candidate.recognitionConfidence !== undefined) === (block.recognitionConfidence !== undefined));
+      const peers = layoutBlocks.filter(
+        (candidate) =>
+          candidate.direction === block.direction &&
+          (candidate.recognitionConfidence !== undefined) ===
+            (block.recognitionConfidence !== undefined),
+      );
       const positions = peers.map(speakerAxisStart).sort((a, b) => a - b);
       if (!positions.length) continue;
       const expectedStart = positions[Math.floor(positions.length / 2)];
-      if (Math.abs(speakerAxisStart(block) - expectedStart) <= Math.max(6, (block.fontSize ?? 12) * 1.5)) {
+      if (
+        Math.abs(speakerAxisStart(block) - expectedStart) <=
+        Math.max(6, (block.fontSize ?? 12) * 1.5)
+      ) {
         supportedQuotedNames.add(normalizeAlias(cue.name));
       }
     }
@@ -237,7 +325,12 @@ function collectRoleCandidates(
 
   return entries
     .map(({ role }) => role)
-    .filter((role) => !usesSpacedLabels || role.evidence !== "quotation" || supportedQuotedNames.has(normalizeAlias(role.label)))
+    .filter(
+      (role) =>
+        !usesSpacedLabels ||
+        role.evidence !== "quotation" ||
+        supportedQuotedNames.has(normalizeAlias(role.label)),
+    )
     .sort(
       (a, b) =>
         b.occurrenceCount - a.occurrenceCount ||
@@ -247,11 +340,13 @@ function collectRoleCandidates(
 
 function speakerAxisStart(block: SourceBlock): number {
   return block.direction === "vertical"
-    ? block.recognitionBounds?.yMax ?? block.y
-    : block.recognitionBounds?.xMin ?? block.x;
+    ? (block.recognitionBounds?.yMax ?? block.y)
+    : (block.recognitionBounds?.xMin ?? block.x);
 }
 
-function mergeJointRoleCandidates(candidates: RoleCandidate[]): RoleCandidate[] {
+function mergeJointRoleCandidates(
+  candidates: RoleCandidate[],
+): RoleCandidate[] {
   const rolesByName = new Map<string, RoleCandidate>();
   for (const role of candidates) {
     for (const name of [role.label, ...role.aliases]) {
@@ -264,8 +359,14 @@ function mergeJointRoleCandidates(candidates: RoleCandidate[]): RoleCandidate[] 
   for (const candidate of candidates) {
     const members = splitJointSpeakerNames(candidate.label);
     if (!members || members.length < 2) continue;
-    const memberRoles = members.map((name) => rolesByName.get(normalizeAlias(name)));
-    if (memberRoles.some((role) => !role) || new Set(memberRoles).size !== members.length) continue;
+    const memberRoles = members.map((name) =>
+      rolesByName.get(normalizeAlias(name)),
+    );
+    if (
+      memberRoles.some((role) => !role) ||
+      new Set(memberRoles).size !== members.length
+    )
+      continue;
 
     grouped.add(candidate.id);
     for (const role of memberRoles) {
@@ -288,7 +389,9 @@ function mergeJointRoleCandidates(candidates: RoleCandidate[]): RoleCandidate[] 
       return {
         ...candidate,
         occurrenceCount: candidate.occurrenceCount + addition.count,
-        exampleBlockIds: [...new Set([...candidate.exampleBlockIds, ...addition.examples])].slice(0, 4),
+        exampleBlockIds: [
+          ...new Set([...candidate.exampleBlockIds, ...addition.examples]),
+        ].slice(0, 4),
       };
     });
 }
@@ -296,7 +399,9 @@ function mergeJointRoleCandidates(candidates: RoleCandidate[]): RoleCandidate[] 
 export function splitInlineSpeakerBlocks(
   sourceBlocks: SourceBlock[],
   roles: RoleCandidate[],
-  recoveredOpeningMarkers: ReadonlySet<string> = inferRecoveredOpeningMarkers(sourceBlocks),
+  recoveredOpeningMarkers: ReadonlySet<string> = inferRecoveredOpeningMarkers(
+    sourceBlocks,
+  ),
 ): SourceBlock[] {
   if (roles.length === 0) return sourceBlocks;
   const roleAliasIndex = createRoleAliasIndex(roles);
@@ -305,17 +410,27 @@ export function splitInlineSpeakerBlocks(
     const cueText = sourceBlock.speakerLabel
       ? sourceBlock.speakerLabel + sourceBlock.text
       : sourceBlock.text;
-    const parsedInitialCue = parseKnownSpeakerCue(cueText, 0, roleAliasIndex, recoveredOpeningMarkers);
+    const parsedInitialCue = parseKnownSpeakerCue(
+      cueText,
+      0,
+      roleAliasIndex,
+      recoveredOpeningMarkers,
+    );
     const initialCue = parsedInitialCue
       ? { name: parsedInitialCue.name, marker: parsedInitialCue.marker }
       : sourceBlock.speakerLabel
         ? { name: sourceBlock.speakerLabel, marker: "" }
         : undefined;
     let currentLabel = initialCue?.name;
-    let currentCoSpeakers = parsedInitialCue?.roles ?? resolveJointSpeakers(currentLabel, roles);
+    let currentCoSpeakers =
+      parsedInitialCue?.roles ?? resolveJointSpeakers(currentLabel, roles);
     let cursor = sourceBlock.speakerLabel
-      ? Math.max(0, (parsedInitialCue?.markerStart ?? sourceBlock.speakerLabel.length) - sourceBlock.speakerLabel.length)
-      : parsedInitialCue?.markerStart ?? 0;
+      ? Math.max(
+          0,
+          (parsedInitialCue?.markerStart ?? sourceBlock.speakerLabel.length) -
+            sourceBlock.speakerLabel.length,
+        )
+      : (parsedInitialCue?.markerStart ?? 0);
 
     if (!sourceBlock.speakerLabel && initialCue) {
       const leading = sourceBlock.text.trimStart();
@@ -323,17 +438,29 @@ export function splitInlineSpeakerBlocks(
       if (parsedInitialCue) {
         cursor = parsedInitialCue.markerStart;
       } else {
-        const nameOffset = leading.startsWith(initialCue.name) ? initialCue.name.length : -1;
+        const nameOffset = leading.startsWith(initialCue.name)
+          ? initialCue.name.length
+          : -1;
         if (nameOffset >= 0) {
           let markerOffset = leadingOffset + nameOffset;
-          while (/\s/u.test(sourceBlock.text[markerOffset] ?? "")) markerOffset += 1;
-          if (isOpeningMarker(sourceBlock.text[markerOffset] ?? "", recoveredOpeningMarkers)) cursor = markerOffset;
+          while (/\s/u.test(sourceBlock.text[markerOffset] ?? ""))
+            markerOffset += 1;
+          if (
+            isOpeningMarker(
+              sourceBlock.text[markerOffset] ?? "",
+              recoveredOpeningMarkers,
+            )
+          )
+            cursor = markerOffset;
         }
       }
     }
 
-    const cues = findInlineSpeakerCues(sourceBlock.text, roleAliasIndex, recoveredOpeningMarkers)
-      .filter((cue) => cue.start > cursor);
+    const cues = findInlineSpeakerCues(
+      sourceBlock.text,
+      roleAliasIndex,
+      recoveredOpeningMarkers,
+    ).filter((cue) => cue.start > cursor);
     if (cues.length === 0) {
       const jointNames = currentCoSpeakers.map((role) => role.label);
       return jointNames.length > 1
@@ -343,7 +470,11 @@ export function splitInlineSpeakerBlocks(
 
     const result: SourceBlock[] = [];
     let part = 0;
-    const addPart = (text: string, label: string | undefined, speakers: RoleCandidate[]) => {
+    const addPart = (
+      text: string,
+      label: string | undefined,
+      speakers: RoleCandidate[],
+    ) => {
       if (!text) return;
       part += 1;
       const coSpeakers = speakers.map((role) => role.label);
@@ -358,7 +489,11 @@ export function splitInlineSpeakerBlocks(
     };
 
     for (const cue of cues) {
-      addPart(sourceBlock.text.slice(cursor, cue.start), currentLabel, currentCoSpeakers);
+      addPart(
+        sourceBlock.text.slice(cursor, cue.start),
+        currentLabel,
+        currentCoSpeakers,
+      );
       cursor = cue.markerStart;
       currentLabel = cue.name;
       currentCoSpeakers = cue.roles;
@@ -372,15 +507,39 @@ function findInlineSpeakerCues(
   text: string,
   roleAliasIndex: RoleAliasNode,
   recoveredOpeningMarkers: ReadonlySet<string>,
-): Array<{ name: string; start: number; markerStart: number; roles: RoleCandidate[] }> {
-  const cues: Array<{ name: string; start: number; markerStart: number; roles: RoleCandidate[] }> = [];
-  for (let index = 0; index < text.length;) {
+): Array<{
+  name: string;
+  start: number;
+  markerStart: number;
+  roles: RoleCandidate[];
+}> {
+  const cues: Array<{
+    name: string;
+    start: number;
+    markerStart: number;
+    roles: RoleCandidate[];
+  }> = [];
+  for (let index = 0; index < text.length; ) {
     const character = String.fromCodePoint(text.codePointAt(index) ?? 0);
     index += character.length;
-    if (!CUE_BOUNDARY_MARKERS.has(character) && !isPotentialQuoteMarker(character)) continue;
-    const cue = parseKnownSpeakerCue(text, index, roleAliasIndex, recoveredOpeningMarkers);
+    if (
+      !CUE_BOUNDARY_MARKERS.has(character) &&
+      !isPotentialQuoteMarker(character)
+    )
+      continue;
+    const cue = parseKnownSpeakerCue(
+      text,
+      index,
+      roleAliasIndex,
+      recoveredOpeningMarkers,
+    );
     if (!cue || cue.start === 0) continue;
-    cues.push({ name: cue.name, start: cue.start, markerStart: cue.markerStart, roles: cue.roles });
+    cues.push({
+      name: cue.name,
+      start: cue.start,
+      markerStart: cue.markerStart,
+      roles: cue.roles,
+    });
   }
   return cues.sort((a, b) => a.start - b.start);
 }
@@ -390,7 +549,13 @@ function parseKnownSpeakerCue(
   from: number,
   roleAliasIndex: RoleAliasNode,
   recoveredOpeningMarkers: ReadonlySet<string>,
-): { name: string; marker: string; start: number; markerStart: number; roles: RoleCandidate[] } | null {
+): {
+  name: string;
+  marker: string;
+  start: number;
+  markerStart: number;
+  roles: RoleCandidate[];
+} | null {
   const start = skipWhitespace(text, from);
   let cursor = start;
   const members: RoleCandidate[] = [];
@@ -415,8 +580,16 @@ function parseKnownSpeakerCue(
 
   const markerStart = skipWhitespace(text, cursor);
   const marker = String.fromCodePoint(text.codePointAt(markerStart) ?? 0);
-  if (!isOpeningMarker(marker, recoveredOpeningMarkers) && !SPEECH_WITH_STAGE_DIRECTION_MARKERS.has(marker)) return null;
-  if (SPEECH_WITH_STAGE_DIRECTION_MARKERS.has(marker) && !hasDialogueAfterStageDirection(text, markerStart, marker)) return null;
+  if (
+    !isOpeningMarker(marker, recoveredOpeningMarkers) &&
+    !SPEECH_WITH_STAGE_DIRECTION_MARKERS.has(marker)
+  )
+    return null;
+  if (
+    SPEECH_WITH_STAGE_DIRECTION_MARKERS.has(marker) &&
+    !hasDialogueAfterStageDirection(text, markerStart, marker)
+  )
+    return null;
   return {
     name: members.map((role) => role.label).join("・"),
     marker,
@@ -426,8 +599,19 @@ function parseKnownSpeakerCue(
   };
 }
 
-function hasDialogueAfterStageDirection(text: string, start: number, opener: string): boolean {
-  const closing = opener === "（" ? "）" : opener === "［" ? "］" : opener === "【" ? "】" : ")";
+function hasDialogueAfterStageDirection(
+  text: string,
+  start: number,
+  opener: string,
+): boolean {
+  const closing =
+    opener === "（"
+      ? "）"
+      : opener === "［"
+        ? "］"
+        : opener === "【"
+          ? "】"
+          : ")";
   const end = text.indexOf(closing, start + opener.length);
   if (end < 0) return false;
   return /[\p{Letter}\p{Number}]/u.test(text.slice(end + closing.length));
@@ -435,11 +619,13 @@ function hasDialogueAfterStageDirection(text: string, start: number, opener: str
 
 function createRoleAliasIndex(roles: RoleCandidate[]): RoleAliasNode {
   const root: RoleAliasNode = { children: new Map() };
-  const entries = roles.flatMap((role) =>
-    [...new Set([role.label, ...role.aliases])]
-      .map((alias) => ({ role, alias, normalized: normalizeAlias(alias) }))
-      .filter((entry) => entry.normalized.length > 0),
-  ).sort((a, b) => b.normalized.length - a.normalized.length);
+  const entries = roles
+    .flatMap((role) =>
+      [...new Set([role.label, ...role.aliases])]
+        .map((alias) => ({ role, alias, normalized: normalizeAlias(alias) }))
+        .filter((entry) => entry.normalized.length > 0),
+    )
+    .sort((a, b) => b.normalized.length - a.normalized.length);
 
   for (const entry of entries) {
     let node = root;
@@ -463,7 +649,9 @@ function roleAliasAt(
 ): { role: RoleCandidate; alias: string; endIndex: number } | undefined {
   let cursor = index;
   let node = root;
-  let match: { role: RoleCandidate; alias: string; endIndex: number } | undefined;
+  let match:
+    | { role: RoleCandidate; alias: string; endIndex: number }
+    | undefined;
 
   while (cursor < text.length) {
     const character = String.fromCodePoint(text.codePointAt(cursor) ?? 0);
@@ -502,7 +690,9 @@ function isPotentialQuoteMarker(value: string): boolean {
 }
 
 function isJointSpeakerSeparator(character: string): boolean {
-  return /[、,，・&＆/／]/u.test(character) || isCjkExtensionCharacter(character);
+  return (
+    /[、,，・&＆/／]/u.test(character) || isCjkExtensionCharacter(character)
+  );
 }
 
 function skipWhitespace(text: string, from: number): number {
@@ -511,34 +701,52 @@ function skipWhitespace(text: string, from: number): number {
   return index;
 }
 
-function resolveJointSpeakers(label: string | undefined, roles: RoleCandidate[]): RoleCandidate[] {
+function resolveJointSpeakers(
+  label: string | undefined,
+  roles: RoleCandidate[],
+): RoleCandidate[] {
   if (!label) return [];
   const members = splitJointSpeakerNames(label);
   if (members && members.length > 1) {
     const resolved = members.map((name) => findRoleByName(name, roles));
-    if (resolved.every((role): role is RoleCandidate => Boolean(role)) && new Set(resolved).size === members.length) {
+    if (
+      resolved.every((role): role is RoleCandidate => Boolean(role)) &&
+      new Set(resolved).size === members.length
+    ) {
       return resolved;
     }
   }
   return [];
 }
 
-function findRoleByName(name: string, roles: RoleCandidate[]): RoleCandidate | undefined {
+function findRoleByName(
+  name: string,
+  roles: RoleCandidate[],
+): RoleCandidate | undefined {
   const normalized = normalizeAlias(name);
-  return roles.find((role) =>
-    normalizeAlias(role.label) === normalized ||
-    role.aliases.some((alias) => normalizeAlias(alias) === normalized),
+  return roles.find(
+    (role) =>
+      normalizeAlias(role.label) === normalized ||
+      role.aliases.some((alias) => normalizeAlias(alias) === normalized),
   );
 }
 
 function splitJointSpeakerNames(label: string): string[] | null {
   if (!Array.from(label).some(isJointSpeakerSeparator)) return null;
-  const members = Array.from(label).reduce<string[]>((result, character) => {
-    if (isJointSpeakerSeparator(character)) result.push("");
-    else result[result.length - 1] = (result[result.length - 1] ?? "") + character;
-    return result;
-  }, [""]).map((member) => member.trim());
-  return members.length > 1 && members.every((member) => NAME_CHARACTERS.test(member))
+  const members = Array.from(label)
+    .reduce<string[]>(
+      (result, character) => {
+        if (isJointSpeakerSeparator(character)) result.push("");
+        else
+          result[result.length - 1] =
+            (result[result.length - 1] ?? "") + character;
+        return result;
+      },
+      [""],
+    )
+    .map((member) => member.trim());
+  return members.length > 1 &&
+    members.every((member) => NAME_CHARACTERS.test(member))
     ? members
     : null;
 }
@@ -546,14 +754,22 @@ function splitJointSpeakerNames(label: string): string[] | null {
 function isValidSpeakerLabel(label: string): boolean {
   if (isPlausibleSpeakerLabel(label)) return true;
   const members = splitJointSpeakerNames(label);
-  return Boolean(members && members.length > 1 && members.every(isPlausibleSingleSpeakerName));
+  return Boolean(
+    members &&
+      members.length > 1 &&
+      members.every(isPlausibleSingleSpeakerName),
+  );
 }
 
 export function isPlausibleSpeakerLabel(label: string): boolean {
   const normalized = normalizeAlias(label);
   if (isPlausibleSingleSpeakerName(normalized)) return true;
   const members = splitJointSpeakerNames(normalized);
-  return Boolean(members && members.length > 1 && members.every(isPlausibleSingleSpeakerName));
+  return Boolean(
+    members &&
+      members.length > 1 &&
+      members.every(isPlausibleSingleSpeakerName),
+  );
 }
 
 export function splitStageDirectionText(
@@ -561,10 +777,12 @@ export function splitStageDirectionText(
   roles: RoleCandidate[],
   leadingSpeakerLabel?: string,
 ): ScriptTextFragment[] {
-  const names = [...new Set([
-    ...(leadingSpeakerLabel ? [leadingSpeakerLabel] : []),
-    ...roles.flatMap((role) => [role.label, ...role.aliases]),
-  ])]
+  const names = [
+    ...new Set([
+      ...(leadingSpeakerLabel ? [leadingSpeakerLabel] : []),
+      ...roles.flatMap((role) => [role.label, ...role.aliases]),
+    ]),
+  ]
     .filter(isPlausibleSpeakerLabel)
     .sort((a, b) => b.length - a.length)
     .map(escapeRegularExpression);
@@ -574,39 +792,75 @@ export function splitStageDirectionText(
   // 内容の単語からセリフかト書きかを推測しない。
   const name = `(?:${names.join("|")})`;
   const subjects = `${name}(?:と${name})*`;
-  const startPattern = new RegExp(`(^|[」』。．.!！?？…\\n])${subjects}[、,，]`, "gu");
+  const startPattern = new RegExp(
+    `(^|[」』。．.!！?？…\\n])${subjects}[、,，]`,
+    "gu",
+  );
   const ranges: Array<{ start: number }> = [];
-  let match: RegExpExecArray | null;
-  while ((match = startPattern.exec(text)) !== null) {
+  for (
+    let match = startPattern.exec(text);
+    match !== null;
+    match = startPattern.exec(text)
+  ) {
     ranges.push({ start: match.index + (match[1]?.length ?? 0) });
   }
 
   if (ranges.length === 0) return [{ kind: "speech", text }];
   let cursor = 0;
-  return ranges.flatMap((range, index) => {
-    const nextStart = ranges[index + 1]?.start ?? text.length;
-    const fragments: ScriptTextFragment[] = [];
-    if (range.start > cursor) fragments.push({ kind: "speech", text: text.slice(cursor, range.start) });
-    fragments.push({ kind: "stage-direction", text: text.slice(range.start, nextStart) });
-    cursor = nextStart;
-    return fragments;
-  }).concat(cursor < text.length ? [{ kind: "speech", text: text.slice(cursor) }] : []);
+  return ranges
+    .flatMap((range, index) => {
+      const nextStart = ranges[index + 1]?.start ?? text.length;
+      const fragments: ScriptTextFragment[] = [];
+      if (range.start > cursor)
+        fragments.push({
+          kind: "speech",
+          text: text.slice(cursor, range.start),
+        });
+      fragments.push({
+        kind: "stage-direction",
+        text: text.slice(range.start, nextStart),
+      });
+      cursor = nextStart;
+      return fragments;
+    })
+    .concat(
+      cursor < text.length
+        ? [{ kind: "speech", text: text.slice(cursor) }]
+        : [],
+    );
 }
 
-export function isStageDirectionBlock(block: SourceBlock, roles: RoleCandidate[]): boolean {
+export function isStageDirectionBlock(
+  block: SourceBlock,
+  roles: RoleCandidate[],
+): boolean {
   const text = normalizeScriptText(block.rawText || block.text);
   if (!text.trim() || /[「『“"]/u.test(text)) return false;
 
-  const fragments = splitStageDirectionText(text, roles, block.speakerLabel?.trim());
-  return fragments.length > 0 && fragments.every((fragment) => fragment.kind === "stage-direction");
+  const fragments = splitStageDirectionText(
+    text,
+    roles,
+    block.speakerLabel?.trim(),
+  );
+  return (
+    fragments.length > 0 &&
+    fragments.every((fragment) => fragment.kind === "stage-direction")
+  );
 }
 
 export function isCastListEntry(block: SourceBlock): boolean {
-  const value = normalizeAlias(normalizeScriptText(`${block.speakerLabel ?? ""}${block.text || block.rawText}`));
+  const value = normalizeAlias(
+    normalizeScriptText(
+      `${block.speakerLabel ?? ""}${block.text || block.rawText}`,
+    ),
+  );
   const prefix = Array.from(value).slice(0, 48).join("");
   const ageMarker = /[（(][0-9０-９]{1,3}[）)]/u.exec(prefix);
   if (!ageMarker) return false;
-  const afterAge = prefix.slice(ageMarker.index + ageMarker[0].length, ageMarker.index + ageMarker[0].length + 8);
+  const afterAge = prefix.slice(
+    ageMarker.index + ageMarker[0].length,
+    ageMarker.index + ageMarker[0].length + 8,
+  );
   return /(?:…|\.{2,})/u.test(afterAge);
 }
 
@@ -634,19 +888,36 @@ export function getSpeakerTurns(
 
   blocks.forEach((block, index) => {
     if (block.boundaryRoleId === null) return;
-    const manuallySelectedRoleId = block.boundaryRoleId ?? manualSpeakers[block.id];
+    const manuallySelectedRoleId =
+      block.boundaryRoleId ?? manualSpeakers[block.id];
     if (!manuallySelectedRoleId && isCastListEntry(block)) return;
     const jointRoles = block.coSpeakers?.length
-      ? block.coSpeakers.map((name) => findRoleByName(name, orderedRoles)).filter((role): role is RoleCandidate => Boolean(role))
+      ? block.coSpeakers
+          .map((name) => findRoleByName(name, orderedRoles))
+          .filter((role): role is RoleCandidate => Boolean(role))
       : [];
-    const cueText = block.speakerLabel ? block.speakerLabel + block.text : block.text;
-    const parsedCue = parseKnownSpeakerCue(cueText, 0, roleAliasIndex, recoveredOpeningMarkers);
-    const cueRoles = jointRoles.length > 0 ? jointRoles : parsedCue?.roles ?? [];
+    const cueText = block.speakerLabel
+      ? block.speakerLabel + block.text
+      : block.text;
+    const parsedCue = parseKnownSpeakerCue(
+      cueText,
+      0,
+      roleAliasIndex,
+      recoveredOpeningMarkers,
+    );
+    const cueRoles =
+      jointRoles.length > 0 ? jointRoles : (parsedCue?.roles ?? []);
     const matchedRoles = manuallySelectedRoleId
       ? roles.filter((candidate) => candidate.id === manuallySelectedRoleId)
       : cueRoles.length > 0
         ? cueRoles
-        : orderedRoles.filter((candidate) => candidate.aliases.some((alias) => cueMatchesAlias(block, alias, recoveredOpeningMarkers))).slice(0, 1);
+        : orderedRoles
+            .filter((candidate) =>
+              candidate.aliases.some((alias) =>
+                cueMatchesAlias(block, alias, recoveredOpeningMarkers),
+              ),
+            )
+            .slice(0, 1);
     for (const role of matchedRoles) {
       turns.push({
         id: "turn-" + block.id + "-" + role.id,
@@ -660,7 +931,12 @@ export function getSpeakerTurns(
   });
 
   const distinctStarts = [...new Set(turns.map((turn) => turn.startIndex))];
-  const nextStartByStart = new Map(distinctStarts.map((start, index) => [start, distinctStarts[index + 1] ?? blocks.length]));
+  const nextStartByStart = new Map(
+    distinctStarts.map((start, index) => [
+      start,
+      distinctStarts[index + 1] ?? blocks.length,
+    ]),
+  );
   return turns.map((turn) => {
     const nextStart = nextStartByStart.get(turn.startIndex) ?? blocks.length;
     const endIndex = Math.max(turn.startIndex, nextStart - 1);
@@ -686,7 +962,9 @@ export function buildPracticeTargets(
   const selectedTurns = units.filter((turn) => turn.roleId === selectedRoleId);
   return selectedTurns.map((turn, index) => {
     const previousTurn = index > 0 ? selectedTurns[index - 1] : undefined;
-    const nextTurn = units.find((candidate) => candidate.startIndex > turn.startIndex);
+    const nextTurn = units.find(
+      (candidate) => candidate.startIndex > turn.startIndex,
+    );
     const boundaryIndex = latestSceneBoundary(sceneStarts, turn.startIndex);
     const minimumStartIndex = Math.max(
       boundaryIndex >= 0 ? boundaryIndex : firstDialogueIndex,
@@ -718,8 +996,15 @@ export function cueAtStart(
 ): { name: string; marker: string } | null {
   const cue = quotedCueAtStart(text, recoveredOpeningMarkers);
   if (!cue) return null;
-  if (roles && !roles.some((role) => role.aliases.some((alias) =>
-    normalizeAlias(alias) === normalizeAlias(cue.name)))) return null;
+  if (
+    roles &&
+    !roles.some((role) =>
+      role.aliases.some(
+        (alias) => normalizeAlias(alias) === normalizeAlias(cue.name),
+      ),
+    )
+  )
+    return null;
   return { name: cue.name, marker: cue.marker };
 }
 
@@ -730,11 +1015,13 @@ export function stripDuplicateSpeakerCue(
 ): string {
   const value = text.trimStart();
   const cue = quotedCueAtStart(value, recoveredOpeningMarkers);
-  if (!cue || speakerLabelKey(cue.name) !== speakerLabelKey(speakerLabel)) return text;
+  if (!cue || speakerLabelKey(cue.name) !== speakerLabelKey(speakerLabel))
+    return text;
 
   const markerIndex = value.indexOf(cue.marker, cue.name.length);
   if (markerIndex < 0) return text;
-  const prefix = value.slice(0, markerIndex)
+  const prefix = value
+    .slice(0, markerIndex)
     .trim()
     .replace(/^[【（(]/u, "")
     .replace(/[】）)]$/u, "")
@@ -745,7 +1032,10 @@ export function stripDuplicateSpeakerCue(
 }
 
 export function normalizeAlias(value: string): string {
-  return value.normalize("NFKC").replace(/[\s\u3000]/gu, "").trim();
+  return value
+    .normalize("NFKC")
+    .replace(/[\s\u3000]/gu, "")
+    .trim();
 }
 
 function speakerLabelKey(value: string): string {
@@ -762,11 +1052,17 @@ export function blockPosition(block: SourceBlock): string {
 }
 
 export function hasEnoughText(blocks: SourceBlock[]): boolean {
-  const total = blocks.reduce((sum, block) => sum + block.text.trim().length, 0);
+  const total = blocks.reduce(
+    (sum, block) => sum + block.text.trim().length,
+    0,
+  );
   return blocks.length > 0 && total >= 30;
 }
 
-function cueForBlock(block: SourceBlock, recoveredOpeningMarkers: ReadonlySet<string> = new Set()): Cue | null {
+function cueForBlock(
+  block: SourceBlock,
+  recoveredOpeningMarkers: ReadonlySet<string> = new Set(),
+): Cue | null {
   if (isCastListEntry(block) || isStageDirectionBlock(block, [])) return null;
   if (block.speakerLabel && isPlausibleSpeakerLabel(block.speakerLabel)) {
     return {
@@ -777,7 +1073,7 @@ function cueForBlock(block: SourceBlock, recoveredOpeningMarkers: ReadonlySet<st
     };
   }
 
-  const quoted = quotedCueAtStart(block.text, recoveredOpeningMarkers)
+  const quoted = quotedCueAtStart(block.text, recoveredOpeningMarkers);
   if (quoted) {
     return {
       ...quoted,
@@ -787,7 +1083,10 @@ function cueForBlock(block: SourceBlock, recoveredOpeningMarkers: ReadonlySet<st
   return null;
 }
 
-function quotedCueAtStart(text: string, recoveredOpeningMarkers: ReadonlySet<string> = new Set()): Cue | null {
+function quotedCueAtStart(
+  text: string,
+  recoveredOpeningMarkers: ReadonlySet<string> = new Set(),
+): Cue | null {
   const value = text.trimStart();
   const wrapped = new RegExp(
     `^(?:【|（|\\()(${SPEAKER_LABEL_CHARACTER}{1,24})(?:】|）|\\))\\s*(.{1})`,
@@ -797,7 +1096,8 @@ function quotedCueAtStart(text: string, recoveredOpeningMarkers: ReadonlySet<str
     wrapped &&
     isValidSpeakerLabel(wrapped[1]) &&
     isOpeningMarker(wrapped[2], recoveredOpeningMarkers) &&
-    (!isCjkExtensionCharacter(wrapped[2]) || value.slice(wrapped[0].length).trim())
+    (!isCjkExtensionCharacter(wrapped[2]) ||
+      value.slice(wrapped[0].length).trim())
   ) {
     return { name: wrapped[1], marker: wrapped[2], evidence: "quotation" };
   }
@@ -810,8 +1110,10 @@ function quotedCueAtStart(text: string, recoveredOpeningMarkers: ReadonlySet<str
     !direct ||
     !isValidSpeakerLabel(direct[1]) ||
     !isOpeningMarker(direct[2], recoveredOpeningMarkers) ||
-    (isCjkExtensionCharacter(direct[2]) && !value.slice(direct[0].length).trim())
-  ) return null;
+    (isCjkExtensionCharacter(direct[2]) &&
+      !value.slice(direct[0].length).trim())
+  )
+    return null;
   return { name: direct[1], marker: direct[2], evidence: "quotation" };
 }
 
@@ -822,10 +1124,17 @@ function cueMatchesAlias(
 ): boolean {
   const normalizedAlias = normalizeAlias(alias);
   if (!normalizedAlias) return false;
-  if (block.speakerAliases?.some((candidate) => normalizeAlias(candidate) === normalizedAlias)) {
+  if (
+    block.speakerAliases?.some(
+      (candidate) => normalizeAlias(candidate) === normalizedAlias,
+    )
+  ) {
     return true;
   }
-  if (block.speakerLabel && normalizeAlias(block.speakerLabel) === normalizedAlias) {
+  if (
+    block.speakerLabel &&
+    normalizeAlias(block.speakerLabel) === normalizedAlias
+  ) {
     return true;
   }
 
@@ -833,7 +1142,10 @@ function cueMatchesAlias(
   return Boolean(cue && normalizeAlias(cue.name) === normalizedAlias);
 }
 
-function isOpeningMarker(value: string, recoveredOpeningMarkers: ReadonlySet<string>): boolean {
+function isOpeningMarker(
+  value: string,
+  recoveredOpeningMarkers: ReadonlySet<string>,
+): boolean {
   return OPENING_MARKERS.includes(value) || recoveredOpeningMarkers.has(value);
 }
 
@@ -870,12 +1182,20 @@ function isSceneHeading(
   recoveredOpeningMarkers: ReadonlySet<string>,
 ): boolean {
   const text = normalizeScriptText(block.text).trim().replace(/\s+/gu, " ");
-  if (!text || isCastListEntry(block) || cueForBlock(block, recoveredOpeningMarkers)) return false;
+  if (
+    !text ||
+    isCastListEntry(block) ||
+    cueForBlock(block, recoveredOpeningMarkers)
+  )
+    return false;
   if (Array.from(text).length > 40 || /[「」『』“”"]/u.test(text)) return false;
   return NUMBERED_SECTION_HEADING.test(text);
 }
 
-function latestSceneBoundary(sceneStarts: number[], targetIndex: number): number {
+function latestSceneBoundary(
+  sceneStarts: number[],
+  targetIndex: number,
+): number {
   for (let index = sceneStarts.length - 1; index >= 0; index -= 1) {
     if (sceneStarts[index] <= targetIndex) return sceneStarts[index];
   }

@@ -8,7 +8,10 @@ export interface BoundaryEdit {
   speakerText?: string;
 }
 
-export function applyBoundaryEdits(blocks: SourceBlock[], edits: BoundaryEdit[]): SourceBlock[] {
+export function applyBoundaryEdits(
+  blocks: SourceBlock[],
+  edits: BoundaryEdit[],
+): SourceBlock[] {
   if (edits.length === 0) return blocks;
   const editsByBlock = new Map<string, BoundaryEdit[]>();
   for (const edit of edits) {
@@ -17,9 +20,11 @@ export function applyBoundaryEdits(blocks: SourceBlock[], edits: BoundaryEdit[])
     editsByBlock.set(edit.blockId, group);
   }
   return blocks.flatMap((block) => {
-    const matching = editsByBlock.get(block.id)?.filter((edit) =>
-      edit.text === block.text && edit.offset < block.text.length,
-    );
+    const matching = editsByBlock
+      .get(block.id)
+      ?.filter(
+        (edit) => edit.text === block.text && edit.offset < block.text.length,
+      );
     if (!matching?.length) return [block];
 
     const first = { ...block };
@@ -43,13 +48,19 @@ export function applyBoundaryEdits(blocks: SourceBlock[], edits: BoundaryEdit[])
         speakerAliases: undefined,
         coSpeakers: undefined,
         boundaryRoleId: edit.roleId,
-        boundaryOrigin: { blockId: block.id, text: block.text, offset: edit.offset },
+        boundaryOrigin: {
+          blockId: block.id,
+          text: block.text,
+          offset: edit.offset,
+        },
       });
       offset = edit.offset;
     }
     first.boundaryOrigin = { blockId: block.id, text: block.text, offset: 0 };
     for (const fragment of fragments) {
-      const edit = matching.find((entry) => entry.offset === fragment.boundaryOrigin?.offset);
+      const edit = matching.find(
+        (entry) => entry.offset === fragment.boundaryOrigin?.offset,
+      );
       if (edit?.speakerText && fragment.text.startsWith(edit.speakerText)) {
         fragment.speakerLabel = edit.speakerText;
         fragment.text = fragment.text.slice(edit.speakerText.length);

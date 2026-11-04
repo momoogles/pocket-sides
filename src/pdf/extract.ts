@@ -4,14 +4,14 @@ import {
   type PDFDocumentProxy,
 } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import { isMarginalPageNumber } from "./layout";
+import { fingerprintPdf } from "./ocr-cache";
 import type {
   ReadingDirection,
   SourceBlock,
   SourceItem,
   SourcePage,
 } from "./types";
-import { fingerprintPdf } from "./ocr-cache";
-import { isMarginalPageNumber } from "./layout";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -32,7 +32,12 @@ interface PositionedTextItem extends SourceItem {
 export async function loadPdf(
   file: File,
   onProgress: (pageNumber: number, pageCount: number) => void,
-): Promise<{ document: PDFDocumentProxy; pages: SourcePage[]; fingerprint: string | null; dispose: () => Promise<void> }> {
+): Promise<{
+  document: PDFDocumentProxy;
+  pages: SourcePage[];
+  fingerprint: string | null;
+  dispose: () => Promise<void>;
+}> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const fingerprintPromise = fingerprintPdf(bytes);
   const task = getDocument({
@@ -81,9 +86,18 @@ export async function loadPdf(
         });
       });
 
-      const fallbackDirection = viewport.width > viewport.height * 1.1 ? "vertical" : "horizontal";
-      const layoutItems = items.filter((item) =>
-        !isMarginalPageNumber(item.text, item.x, item.y, viewport.width, viewport.height, pageNumber),
+      const fallbackDirection =
+        viewport.width > viewport.height * 1.1 ? "vertical" : "horizontal";
+      const layoutItems = items.filter(
+        (item) =>
+          !isMarginalPageNumber(
+            item.text,
+            item.x,
+            item.y,
+            viewport.width,
+            viewport.height,
+            pageNumber,
+          ),
       );
       const direction = detectDirection(layoutItems, fallbackDirection);
       const blocks = makeBlocks(layoutItems, direction, pageNumber);
@@ -120,33 +134,47 @@ function detectDirection(
   const verticalCount = items.filter((item) => item.direction === "ttb").length;
   if (verticalCount / items.length >= 0.35) return "vertical";
 
-  const tolerance = Math.max(2.5, median(items.map((item) => item.fontSize)) * 0.48);
-  const xBands = countCoordinateBands(items.map((item) => item.x), tolerance);
-  const yBands = countCoordinateBands(items.map((item) => item.y), tolerance);
+  const tolerance = Math.max(
+    2.5,
+    median(items.map((item) => item.fontSize)) * 0.48,
+  );
+  const xBands = countCoordinateBands(
+    items.map((item) => item.x),
+    tolerance,
+  );
+  const yBands = countCoordinateBands(
+    items.map((item) => item.y),
+    tolerance,
+  );
   const cjkItems = items.filter((item) =>
     /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(item.text),
   );
-  const verticalGlyphRatio = cjkItems.length === 0
-    ? 0
-    : cjkItems.filter((item) => {
-        if (Array.from(item.text.trim()).length !== 1) return false;
-        const width = Math.max(Math.abs(item.width), 1);
-        const height = Math.max(Math.abs(item.height), 1);
-        return Math.max(width, height) / Math.min(width, height) <= 1.4;
-      }).length / cjkItems.length;
-  const horizontalRunRatio = cjkItems.length === 0
-    ? 0
-    : cjkItems.filter((item) =>
-        Array.from(item.text.trim()).length > 1 ||
-        Math.abs(item.width) > Math.max(Math.abs(item.height) * 1.4, item.fontSize * 1.4),
-      ).length / cjkItems.length;
+  const verticalGlyphRatio =
+    cjkItems.length === 0
+      ? 0
+      : cjkItems.filter((item) => {
+          if (Array.from(item.text.trim()).length !== 1) return false;
+          const width = Math.max(Math.abs(item.width), 1);
+          const height = Math.max(Math.abs(item.height), 1);
+          return Math.max(width, height) / Math.min(width, height) <= 1.4;
+        }).length / cjkItems.length;
+  const horizontalRunRatio =
+    cjkItems.length === 0
+      ? 0
+      : cjkItems.filter(
+          (item) =>
+            Array.from(item.text.trim()).length > 1 ||
+            Math.abs(item.width) >
+              Math.max(Math.abs(item.height) * 1.4, item.fontSize * 1.4),
+        ).length / cjkItems.length;
 
   if (xBands < yBands * 0.8) return "vertical";
   if (horizontalRunRatio >= 0.6) return "horizontal";
 
   const coordinateBandsAreBalanced =
     Math.abs(xBands - yBands) <= Math.max(2, Math.max(xBands, yBands) * 0.2);
-  if (coordinateBandsAreBalanced && verticalGlyphRatio >= 0.6) return "vertical";
+  if (coordinateBandsAreBalanced && verticalGlyphRatio >= 0.6)
+    return "vertical";
 
   return "horizontal";
 }
@@ -168,35 +196,43 @@ function makeBlocks(
     );
     const columnItems = items.filter((item) => !isInlineLatinItem(item));
     for (const item of [...columnItems].sort((a, b) => b.x - a.x)) {
-      let column = columns.find((candidate) => Math.abs(candidate.x - item.x) <= tolerance);
+      let column = columns.find(
+        (candidate) => Math.abs(candidate.x - item.x) <= tolerance,
+      );
       if (!column) {
         column = { x: item.x, items: [] };
         columns.push(column);
       }
       column.items.push(item);
       column.x =
-        column.items.reduce((sum, value) => sum + value.x, 0) / column.items.length;
+        column.items.reduce((sum, value) => sum + value.x, 0) /
+        column.items.length;
     }
 
     for (const item of inlineLatinItems) {
       const nearbyColumns = columns
         .map((column) => {
-          const yDistance = Math.min(...column.items.map((candidate) => Math.abs(candidate.y - item.y)));
+          const yDistance = Math.min(
+            ...column.items.map((candidate) => Math.abs(candidate.y - item.y)),
+          );
           return {
             column,
             yDistance,
             xDistance: Math.abs(column.x - item.x),
           };
         })
-        .filter(({ yDistance, xDistance }) =>
-          yDistance <= Math.max(tolerance * 3, typicalFontSize * 1.5) &&
-          xDistance <= Math.max(tolerance * 3, typicalFontSize * 1.5),
+        .filter(
+          ({ yDistance, xDistance }) =>
+            yDistance <= Math.max(tolerance * 3, typicalFontSize * 1.5) &&
+            xDistance <= Math.max(tolerance * 3, typicalFontSize * 1.5),
         )
         .sort((a, b) => a.yDistance - b.yDistance || a.xDistance - b.xDistance);
       const nearest = nearbyColumns[0]?.column;
       if (nearest) {
         nearest.items.push(item);
-        nearest.x = nearest.items.reduce((sum, value) => sum + value.x, 0) / nearest.items.length;
+        nearest.x =
+          nearest.items.reduce((sum, value) => sum + value.x, 0) /
+          nearest.items.length;
       } else {
         columns.push({ x: item.x, items: [item] });
       }
@@ -223,18 +259,23 @@ function makeBlocks(
 
   const rows: Array<{ y: number; items: PositionedTextItem[] }> = [];
   for (const item of [...items].sort((a, b) => b.y - a.y || a.x - b.x)) {
-    let row = rows.find((candidate) => Math.abs(candidate.y - item.y) <= tolerance);
+    let row = rows.find(
+      (candidate) => Math.abs(candidate.y - item.y) <= tolerance,
+    );
     if (!row) {
       row = { y: item.y, items: [] };
       rows.push(row);
     }
     row.items.push(item);
-    row.y = row.items.reduce((sum, value) => sum + value.y, 0) / row.items.length;
+    row.y =
+      row.items.reduce((sum, value) => sum + value.y, 0) / row.items.length;
   }
 
   rows.sort((a, b) => b.y - a.y);
   return rows.map((row, index) => {
-    const ordered = [...row.items].sort((a, b) => a.x - b.x || a.contentIndex - b.contentIndex);
+    const ordered = [...row.items].sort(
+      (a, b) => a.x - b.x || a.contentIndex - b.contentIndex,
+    );
     const block = blockFromItems(
       ordered,
       pageNumber,
@@ -278,7 +319,8 @@ function groupInlineLatinItems(
         next.contentIndex - previous.contentIndex !== 1 ||
         Math.abs(next.x - previous.x) > typicalFontSize * 2 ||
         Math.abs(next.y - previous.y) > typicalFontSize * 1.25
-      ) break;
+      )
+        break;
       run.push(next);
       previous = next;
       index += 1;
@@ -311,13 +353,15 @@ function blockFromItems(
   axisPosition: number,
   typicalFontSize: number,
 ): SourceBlock {
-  const speakerLabel = direction === "vertical"
-    ? findSpeakerLabelFromSpacing(items, typicalFontSize)
-    : undefined;
+  const speakerLabel =
+    direction === "vertical"
+      ? findSpeakerLabelFromSpacing(items, typicalFontSize)
+      : undefined;
   const rawText = items.map((item) => item.text).join("");
-  const speechText = speakerLabel && rawText.startsWith(speakerLabel)
-    ? rawText.slice(speakerLabel.length).trimStart()
-    : rawText;
+  const speechText =
+    speakerLabel && rawText.startsWith(speakerLabel)
+      ? rawText.slice(speakerLabel.length).trimStart()
+      : rawText;
   return {
     id: "p" + pageNumber + "-b" + orderOnPage,
     pageNumber,
@@ -325,8 +369,8 @@ function blockFromItems(
     direction,
     rawText,
     text: speechText,
-    x: direction === "vertical" ? axisPosition : items[0]?.x ?? 0,
-    y: direction === "vertical" ? items[0]?.y ?? 0 : axisPosition,
+    x: direction === "vertical" ? axisPosition : (items[0]?.x ?? 0),
+    y: direction === "vertical" ? (items[0]?.y ?? 0) : axisPosition,
     itemIds: items.flatMap((item) => item.sourceItemIds ?? [item.id]),
     fontSize: typicalFontSize,
     ...(speakerLabel ? { speakerLabel } : {}),
@@ -357,9 +401,15 @@ function findSpeakerLabelFromSpacing(
 }
 
 function isShortRoleLabel(value: string): boolean {
-  const memberPattern = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー・]{1,8}$/u;
-  const members = value.trim().split(/[、,，&＆/／\u3400-\u4dbf]/u).map((member) => member.trim());
-  return members.length > 0 && members.every((member) => memberPattern.test(member));
+  const memberPattern =
+    /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー・]{1,8}$/u;
+  const members = value
+    .trim()
+    .split(/[、,，&＆/／\u3400-\u4dbf]/u)
+    .map((member) => member.trim());
+  return (
+    members.length > 0 && members.every((member) => memberPattern.test(member))
+  );
 }
 
 function countCoordinateBands(values: number[], tolerance: number): number {

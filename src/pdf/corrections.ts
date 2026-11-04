@@ -16,39 +16,92 @@ export interface CharacterMappingEvidence {
 }
 
 const SMALL_YOON_FOR_FULL: Record<string, string> = {
-  や: "ゃ", ゆ: "ゅ", よ: "ょ",
-  ヤ: "ャ", ユ: "ュ", ヨ: "ョ",
+  や: "ゃ",
+  ゆ: "ゅ",
+  よ: "ょ",
+  ヤ: "ャ",
+  ユ: "ュ",
+  ヨ: "ョ",
 };
 
 export function normalizeScriptText(value: string): string {
-  return value.trim()
-    .replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー0-9０-９])\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー0-9０-９])/gu, "$1")
-    .replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー・]{1,8})\s+([\p{Script=Latin}\p{Number}０-９]{1,3})(?=\s*[「『（(【])/gu, "$1$2")
-    .replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー・]{1,8}[\p{Script=Latin}\p{Number}０-９]{1,3})\s+(?=[「『（(【])/gu, "$1")
-    .replace(/(?<![\p{Script=Latin}])\p{Script=Latin}(?:\s+\p{Script=Latin}){1,}(?![\p{Script=Latin}])/gu, (letters) => letters.replace(/\s+/gu, ""))
-    .replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー])\s+(?=[\p{Script=Latin}\p{Number}０-９])/gu, "$1")
-    .replace(/([\p{Script=Latin}\p{Number}０-９])\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー])/gu, "$1")
+  return value
+    .trim()
+    .replace(
+      /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー0-9０-９])\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー0-9０-９])/gu,
+      "$1",
+    )
+    .replace(
+      /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー・]{1,8})\s+([\p{Script=Latin}\p{Number}０-９]{1,3})(?=\s*[「『（(【])/gu,
+      "$1$2",
+    )
+    .replace(
+      /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー・]{1,8}[\p{Script=Latin}\p{Number}０-９]{1,3})\s+(?=[「『（(【])/gu,
+      "$1",
+    )
+    .replace(
+      /(?<![\p{Script=Latin}])\p{Script=Latin}(?:\s+\p{Script=Latin}){1,}(?![\p{Script=Latin}])/gu,
+      (letters) => letters.replace(/\s+/gu, ""),
+    )
+    .replace(
+      /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー])\s+(?=[\p{Script=Latin}\p{Number}０-９])/gu,
+      "$1",
+    )
+    .replace(
+      /([\p{Script=Latin}\p{Number}０-９])\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー])/gu,
+      "$1",
+    )
     .replace(/\s+([」』）)】、。，．,!?！？:：…])/gu, "$1")
     .replace(/([「『（(【])\s+/gu, "$1")
-    .replace(/([。．.!！?？、，…」』）)\]】：:；;])\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー0-9０-９])/gu, "$1")
+    .replace(
+      /([。．.!！?？、，…」』）)\]】：:；;])\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー0-9０-９])/gu,
+      "$1",
+    )
     .replace(/[?？](?:\s*[?？])+/gu, "？")
     .replace(/[!！](?:\s*[!！])+/gu, "！")
-    .replace(/([きぎしじちぢにひびぴみりキギシジチヂニヒビピミリ])ー([ゃゅょャュョ])/gu, "$1$2ー")
-    .replace(/\(([^()\n]*[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}][^()\n]*)\)/gu, "（$1）")
+    .replace(
+      /([きぎしじちぢにひびぴみりキギシジチヂニヒビピミリ])ー([ゃゅょャュョ])/gu,
+      "$1$2ー",
+    )
+    .replace(
+      /\(([^()\n]*[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}][^()\n]*)\)/gu,
+      "（$1）",
+    )
     .replace(/[.．]\s*(?=[…⋯])/gu, "")
-    .replace(/([きしちにひみりぎじぢびぴキシチニヒミリギジヂビピ])([ゃゅょャュョ])([ー〜])\1([やゆよヤユヨ])\3/gu, (match, firstBase: string, firstSmall: string, mark: string, secondFull: string) => {
-      return SMALL_YOON_FOR_FULL[secondFull] === firstSmall
-        ? `${firstBase}${firstSmall}${mark}${firstBase}${firstSmall}${mark}`
-        : match;
-    })
-    .replace(/([きしちにひみりぎじぢびぴキシチニヒミリギジヂビピ])([やゆよヤユヨ])([ー〜])\1([ゃゅょャュョ])\3/gu, (match, firstBase: string, firstFull: string, mark: string, secondSmall: string) => {
-      return SMALL_YOON_FOR_FULL[firstFull] === secondSmall
-        ? `${firstBase}${secondSmall}${mark}${firstBase}${secondSmall}${mark}`
-        : match;
-    });
+    .replace(
+      /([きしちにひみりぎじぢびぴキシチニヒミリギジヂビピ])([ゃゅょャュョ])([ー〜])\1([やゆよヤユヨ])\3/gu,
+      (
+        match,
+        firstBase: string,
+        firstSmall: string,
+        mark: string,
+        secondFull: string,
+      ) => {
+        return SMALL_YOON_FOR_FULL[secondFull] === firstSmall
+          ? `${firstBase}${firstSmall}${mark}${firstBase}${firstSmall}${mark}`
+          : match;
+      },
+    )
+    .replace(
+      /([きしちにひみりぎじぢびぴキシチニヒミリギジヂビピ])([やゆよヤユヨ])([ー〜])\1([ゃゅょャュョ])\3/gu,
+      (
+        match,
+        firstBase: string,
+        firstFull: string,
+        mark: string,
+        secondSmall: string,
+      ) => {
+        return SMALL_YOON_FOR_FULL[firstFull] === secondSmall
+          ? `${firstBase}${secondSmall}${mark}${firstBase}${secondSmall}${mark}`
+          : match;
+      },
+    );
 }
 
-export function normalizeScriptPunctuation(value: string, speakerLabel?: string): string {
+export function normalizeScriptPunctuation(
+  value: string,
+  speakerLabel?: string,
+): string {
   let normalized = normalizeScriptText(value);
   const label = speakerLabel ? normalizeScriptText(speakerLabel) : "";
 
@@ -63,19 +116,43 @@ export function normalizeScriptPunctuation(value: string, speakerLabel?: string)
   const verticalStrokes = String.raw`[|｜│┃︱︳∣丨]`;
   return normalized
     .replace(/[~～]/gu, "〜")
-    .replace(/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ])\s+(?=〜)/gu, "$1")
-    .replace(/〜\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ])/gu, "〜")
-    .replace(new RegExp(`(${japaneseCharacter})\\s*${verticalStrokes}\\s*(?=${japaneseCharacter})`, "gu"), "$1ー")
-    .replace(new RegExp(`(${japaneseCharacter})\\s*${verticalStrokes}\\s*(?=[…⋯])`, "gu"), "$1ー")
+    .replace(
+      /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ])\s+(?=〜)/gu,
+      "$1",
+    )
+    .replace(
+      /〜\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ])/gu,
+      "〜",
+    )
+    .replace(
+      new RegExp(
+        `(${japaneseCharacter})\\s*${verticalStrokes}\\s*(?=${japaneseCharacter})`,
+        "gu",
+      ),
+      "$1ー",
+    )
+    .replace(
+      new RegExp(
+        `(${japaneseCharacter})\\s*${verticalStrokes}\\s*(?=[…⋯])`,
+        "gu",
+      ),
+      "$1ー",
+    )
     .replace(new RegExp(`(ー)\\s*${verticalStrokes}\\s*(?=[…⋯])`, "gu"), "$1")
-    .replace(/([きぎしじちぢにひびぴみりキギシジチヂニヒビピミリ])ー([ゃゅょャュョ])/gu, "$1$2ー");
+    .replace(
+      /([きぎしじちぢにひびぴみりキギシジチヂニヒビピミリ])ー([ゃゅょャュョ])/gu,
+      "$1$2ー",
+    );
 }
 
 /** Keeps readable PDF characters and uses OCR to fill text extraction failures. */
 export function mergeReadableSourceText(
   sourceText: string,
   recognizedText: string,
-  onCharacterMapping?: (sourceCharacter: string, recognizedCharacter: string) => void,
+  onCharacterMapping?: (
+    sourceCharacter: string,
+    recognizedCharacter: string,
+  ) => void,
   characterCorrections: Readonly<Record<string, string>> = {},
 ): string {
   const source = Array.from(sourceText);
@@ -90,15 +167,24 @@ export function mergeReadableSourceText(
   }
 
   const commonLength = new Uint32Array(cells);
-  for (let sourceIndex = source.length - 1; sourceIndex >= 0; sourceIndex -= 1) {
-    for (let recognizedIndex = recognized.length - 1; recognizedIndex >= 0; recognizedIndex -= 1) {
+  for (
+    let sourceIndex = source.length - 1;
+    sourceIndex >= 0;
+    sourceIndex -= 1
+  ) {
+    for (
+      let recognizedIndex = recognized.length - 1;
+      recognizedIndex >= 0;
+      recognizedIndex -= 1
+    ) {
       const sourceCharacter = source[sourceIndex] ?? "";
       const cellIndex = sourceIndex * width + recognizedIndex;
       if (
         isAlignmentAnchor(sourceCharacter) &&
         sourceCharacter === recognized[recognizedIndex]
       ) {
-        commonLength[cellIndex] = 1 + commonLength[(sourceIndex + 1) * width + recognizedIndex + 1];
+        commonLength[cellIndex] =
+          1 + commonLength[(sourceIndex + 1) * width + recognizedIndex + 1];
       } else {
         commonLength[cellIndex] = Math.max(
           commonLength[(sourceIndex + 1) * width + recognizedIndex],
@@ -130,11 +216,8 @@ export function mergeReadableSourceText(
     }
   }
 
-  const pairedDelimiterReplacements = inferPairedUnreadableDelimiterReplacements(
-    source,
-    recognized,
-    anchors,
-  );
+  const pairedDelimiterReplacements =
+    inferPairedUnreadableDelimiterReplacements(source, recognized, anchors);
   let merged = "";
   let sourceStart = 0;
   let recognizedStart = 0;
@@ -143,7 +226,10 @@ export function mergeReadableSourceText(
     const recognizedGap = recognized.slice(recognizedStart, recognizedEnd);
     const recognizedCharacters = recognizedGap
       .map((character, index) => ({ character, index }))
-      .filter(({ character }) => !/\s/u.test(character) && !isUnreadableCharacter(character));
+      .filter(
+        ({ character }) =>
+          !/\s/u.test(character) && !isUnreadableCharacter(character),
+      );
     const sourceCharacterPositions = new Map(
       sourceGap
         .map((character, index) => ({ character, index }))
@@ -157,48 +243,77 @@ export function mergeReadableSourceText(
       if (
         !isReplaceableSourceCharacter(source, sourceStart + sourceOffset) ||
         recognizedCharacters.length === 0
-      ) return;
-      const sourceCharacterPosition = sourceCharacterPositions.get(sourceOffset);
+      )
+        return;
+      const sourceCharacterPosition =
+        sourceCharacterPositions.get(sourceOffset);
       if (sourceCharacterPosition === undefined) return;
 
       const sourceCharacterIndex = sourceStart + sourceOffset;
       if (pairedDelimiterReplacements.has(sourceCharacterIndex)) return;
-      const sourceBoundary = unmatchedBoundaryKind(source, sourceCharacterIndex);
-      const previousCharacter = adjacentNonWhitespaceCharacter(source, sourceCharacterIndex, -1);
-      const nextCharacter = adjacentNonWhitespaceCharacter(source, sourceCharacterIndex, 1);
-      const quoteEndingContext = /[。．!！?？…⋯]/u.test(previousCharacter) &&
+      const sourceBoundary = unmatchedBoundaryKind(
+        source,
+        sourceCharacterIndex,
+      );
+      const previousCharacter = adjacentNonWhitespaceCharacter(
+        source,
+        sourceCharacterIndex,
+        -1,
+      );
+      const nextCharacter = adjacentNonWhitespaceCharacter(
+        source,
+        sourceCharacterIndex,
+        1,
+      );
+      const quoteEndingContext =
+        /[。．!！?？…⋯]/u.test(previousCharacter) &&
         isJapaneseScriptCharacter(nextCharacter);
-      const idealIndex = sourceBoundary === "start"
-        ? 0
-        : sourceBoundary === "end"
-          ? recognizedCharacters.length - 1
-          : Math.max(
-              0,
-              Math.min(
-                recognizedCharacters.length - 1,
-                Math.ceil(
-                  ((sourceCharacterPosition + 0.5) * recognizedCharacters.length) /
-                    sourceCharacterPositions.size - 1,
+      const idealIndex =
+        sourceBoundary === "start"
+          ? 0
+          : sourceBoundary === "end"
+            ? recognizedCharacters.length - 1
+            : Math.max(
+                0,
+                Math.min(
+                  recognizedCharacters.length - 1,
+                  Math.ceil(
+                    ((sourceCharacterPosition + 0.5) *
+                      recognizedCharacters.length) /
+                      sourceCharacterPositions.size -
+                      1,
+                  ),
                 ),
-              ),
-            );
-      const embeddedStrokeContext = hasJapaneseNeighbors(source, sourceStart + sourceOffset);
+              );
+      const embeddedStrokeContext = hasJapaneseNeighbors(
+        source,
+        sourceStart + sourceOffset,
+      );
       const hasOnlyUnreadableSourcePrefix = source
         .slice(0, sourceStart + sourceOffset + 1)
-        .every((character) => /\s/u.test(character) || isUnreadableCharacter(character));
+        .every(
+          (character) =>
+            /\s/u.test(character) || isUnreadableCharacter(character),
+        );
       let bestIndex = -1;
       let bestDistance = Number.POSITIVE_INFINITY;
-      const quoteCandidate = quoteEndingContext || sourceBoundary === "end"
-        ? lastIndexOfCharacter(recognizedCharacters, isClosingQuoteCharacter)
-        : -1;
+      const quoteCandidate =
+        quoteEndingContext || sourceBoundary === "end"
+          ? lastIndexOfCharacter(recognizedCharacters, isClosingQuoteCharacter)
+          : -1;
       const openingDelimiterCandidate = hasOnlyUnreadableSourcePrefix
-        ? recognizedCharacters.find(({ character, index }) =>
-            !usedRecognizedIndexes.has(index) && isOpeningDelimiterCharacter(character),
-          )?.index ?? -1
+        ? (recognizedCharacters.find(
+            ({ character, index }) =>
+              !usedRecognizedIndexes.has(index) &&
+              isOpeningDelimiterCharacter(character),
+          )?.index ?? -1)
         : -1;
       if (openingDelimiterCandidate >= 0) {
         bestIndex = openingDelimiterCandidate;
-      } else if (quoteCandidate >= 0 && !usedRecognizedIndexes.has(quoteCandidate)) {
+      } else if (
+        quoteCandidate >= 0 &&
+        !usedRecognizedIndexes.has(quoteCandidate)
+      ) {
         bestIndex = quoteCandidate;
       } else if (embeddedStrokeContext) {
         recognizedCharacters.forEach(({ character, index }, candidateIndex) => {
@@ -211,14 +326,16 @@ export function mergeReadableSourceText(
         });
       }
       if (bestIndex < 0) {
-        recognizedCharacters.forEach(({ index: recognizedOffset }, candidateIndex) => {
-          if (usedRecognizedIndexes.has(recognizedOffset)) return;
-          const distance = Math.abs(candidateIndex - idealIndex);
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            bestIndex = recognizedOffset;
-          }
-        });
+        recognizedCharacters.forEach(
+          ({ index: recognizedOffset }, candidateIndex) => {
+            if (usedRecognizedIndexes.has(recognizedOffset)) return;
+            const distance = Math.abs(candidateIndex - idealIndex);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestIndex = recognizedOffset;
+            }
+          },
+        );
       }
       if (bestIndex >= 0) {
         replacements.set(sourceOffset, bestIndex);
@@ -233,7 +350,8 @@ export function mergeReadableSourceText(
         return;
       }
 
-      const pairedDelimiter = pairedDelimiterReplacements.get(sourceCharacterIndex);
+      const pairedDelimiter =
+        pairedDelimiterReplacements.get(sourceCharacterIndex);
       if (pairedDelimiter) {
         onCharacterMapping?.(character, pairedDelimiter);
         merged += pairedDelimiter;
@@ -243,15 +361,24 @@ export function mergeReadableSourceText(
       const replacementIndex = replacements.get(sourceOffset);
       if (replacementIndex !== undefined) {
         const replacementCharacter = recognizedGap[replacementIndex] ?? "";
-        const embeddedStrokeContext = hasJapaneseNeighbors(source, sourceCharacterIndex);
+        const embeddedStrokeContext = hasJapaneseNeighbors(
+          source,
+          sourceCharacterIndex,
+        );
         if (isUnreadableCharacter(character)) {
-          if (!isJapaneseScriptCharacter(replacementCharacter) || embeddedStrokeContext) {
+          if (
+            !isJapaneseScriptCharacter(replacementCharacter) ||
+            embeddedStrokeContext
+          ) {
             onCharacterMapping?.(character, replacementCharacter);
           }
-          const correctedCharacter = characterCorrections[character] ?? replacementCharacter;
-          merged += embeddedStrokeContext && isVerticalStrokeCharacter(correctedCharacter)
-            ? "ー"
-            : correctedCharacter;
+          const correctedCharacter =
+            characterCorrections[character] ?? replacementCharacter;
+          merged +=
+            embeddedStrokeContext &&
+            isVerticalStrokeCharacter(correctedCharacter)
+              ? "ー"
+              : correctedCharacter;
         } else if (embeddedStrokeContext && replacementCharacter === "ー") {
           merged += "ー";
         } else {
@@ -286,17 +413,31 @@ function inferPairedUnreadableDelimiterReplacements(
   anchors: Array<{ sourceIndex: number; recognizedIndex: number }>,
 ): Map<number, string> {
   const openingForClosing: Record<string, string> = {
-    ")": "(", "）": "（", "]": "[", "］": "［", "】": "【", "}": "{",
-    "〉": "〈", "》": "《",
+    ")": "(",
+    "）": "（",
+    "]": "[",
+    "］": "［",
+    "】": "【",
+    "}": "{",
+    "〉": "〈",
+    "》": "《",
   };
   const replacements = new Map<number, string>();
 
   for (let openingIndex = 0; openingIndex < source.length; openingIndex += 1) {
     if (!isUnreadableCharacter(source[openingIndex] ?? "")) continue;
-    const previousCharacter = adjacentNonWhitespaceCharacter(source, openingIndex, -1);
+    const previousCharacter = adjacentNonWhitespaceCharacter(
+      source,
+      openingIndex,
+      -1,
+    );
     if (isJapaneseScriptCharacter(previousCharacter)) continue;
 
-    for (let closingIndex = openingIndex + 1; closingIndex < source.length; closingIndex += 1) {
+    for (
+      let closingIndex = openingIndex + 1;
+      closingIndex < source.length;
+      closingIndex += 1
+    ) {
       const sourceCharacter = source[closingIndex] ?? "";
       if (isClosingQuoteCharacter(sourceCharacter)) break;
       if (!isUnreadableCharacter(sourceCharacter)) continue;
@@ -305,13 +446,20 @@ function inferPairedUnreadableDelimiterReplacements(
       if (innerText.filter(isJapaneseScriptCharacter).length < 2) break;
 
       const previousAnchor = lastAnchorBefore(anchors, closingIndex);
-      const nextAnchor = anchors.find((anchor) => anchor.sourceIndex > closingIndex);
-      if (!previousAnchor || !nextAnchor) break;
-      const closingGap = recognized.slice(previousAnchor.recognizedIndex + 1, nextAnchor.recognizedIndex);
-      const closingDelimiter = [...closingGap].reverse().find((character) =>
-        Object.hasOwn(openingForClosing, character),
+      const nextAnchor = anchors.find(
+        (anchor) => anchor.sourceIndex > closingIndex,
       );
-      const openingDelimiter = closingDelimiter ? openingForClosing[closingDelimiter] : undefined;
+      if (!previousAnchor || !nextAnchor) break;
+      const closingGap = recognized.slice(
+        previousAnchor.recognizedIndex + 1,
+        nextAnchor.recognizedIndex,
+      );
+      const closingDelimiter = [...closingGap]
+        .reverse()
+        .find((character) => Object.hasOwn(openingForClosing, character));
+      const openingDelimiter = closingDelimiter
+        ? openingForClosing[closingDelimiter]
+        : undefined;
       if (!openingDelimiter || !closingDelimiter) break;
 
       replacements.set(openingIndex, openingDelimiter);
@@ -339,18 +487,24 @@ export function applyCharacterCorrections(
   corrections: Record<string, string>,
 ): SourceBlock[] {
   const replaceCharacters = (value: string) =>
-    Array.from(value).map((character) => corrections[character] ?? character).join("");
+    Array.from(value)
+      .map((character) => corrections[character] ?? character)
+      .join("");
 
   return blocks.map((block) => {
     const speakerLabel = block.speakerLabel
       ? normalizeScriptText(replaceCharacters(block.speakerLabel))
       : undefined;
-    const normalizedRawText = normalizeScriptPunctuation(block.rawText, speakerLabel);
+    const normalizedRawText = normalizeScriptPunctuation(
+      block.rawText,
+      speakerLabel,
+    );
     const replacedRawText = replaceCharacters(normalizedRawText);
     const correctedRawText = normalizeScriptText(replacedRawText);
-    const text = speakerLabel && correctedRawText.startsWith(speakerLabel)
-      ? correctedRawText.slice(speakerLabel.length).trimStart()
-      : correctedRawText;
+    const text =
+      speakerLabel && correctedRawText.startsWith(speakerLabel)
+        ? correctedRawText.slice(speakerLabel.length).trimStart()
+        : correctedRawText;
 
     return {
       ...block,
@@ -369,7 +523,8 @@ export function findUnusualCharacters(
   for (const block of blocks) {
     const reviewText = block.rawText;
     for (const character of Array.from(reviewText)) {
-      if (!isUnusualCharacter(character) || corrections[character]?.trim()) continue;
+      if (!isUnusualCharacter(character) || corrections[character]?.trim())
+        continue;
       const entry = found.get(character);
       if (entry) {
         entry.count += 1;
@@ -399,7 +554,10 @@ export function startsWithUnreadableCharacter(value: string): boolean {
 export function inferDocumentCharacterCorrections(
   evidence: CharacterMappingEvidence[],
 ): Record<string, string> {
-  const observations = new Map<string, Map<string, { count: number; blocks: Set<string>; pages: Set<number> }>>();
+  const observations = new Map<
+    string,
+    Map<string, { count: number; blocks: Set<string>; pages: Set<number> }>
+  >();
 
   for (const item of evidence) {
     if (
@@ -407,7 +565,8 @@ export function inferDocumentCharacterCorrections(
       Array.from(item.recognizedCharacter).length !== 1 ||
       isUnreadableCharacter(item.recognizedCharacter) ||
       /\s/u.test(item.recognizedCharacter)
-    ) continue;
+    )
+      continue;
 
     let candidates = observations.get(item.sourceCharacter);
     if (!candidates) {
@@ -426,9 +585,14 @@ export function inferDocumentCharacterCorrections(
 
   const corrections: Record<string, string> = {};
   for (const [sourceCharacter, candidates] of observations) {
-    const ranked = [...candidates.entries()].sort((a, b) => b[1].count - a[1].count);
+    const ranked = [...candidates.entries()].sort(
+      (a, b) => b[1].count - a[1].count,
+    );
     const [recognizedCharacter, winner] = ranked[0] ?? [];
-    const totalCount = ranked.reduce((sum, [, candidate]) => sum + candidate.count, 0);
+    const totalCount = ranked.reduce(
+      (sum, [, candidate]) => sum + candidate.count,
+      0,
+    );
     if (
       recognizedCharacter &&
       winner &&
@@ -436,7 +600,8 @@ export function inferDocumentCharacterCorrections(
       winner.blocks.size >= 2 &&
       winner.pages.size >= 2 &&
       winner.count / totalCount >= 0.8
-    ) corrections[sourceCharacter] = recognizedCharacter;
+    )
+      corrections[sourceCharacter] = recognizedCharacter;
   }
   return corrections;
 }
@@ -461,10 +626,15 @@ function isAlignmentAnchor(character: string): boolean {
   return !isUnreadableCharacter(character) && !/\s/u.test(character);
 }
 
-function isReplaceableSourceCharacter(source: string[], index: number): boolean {
+function isReplaceableSourceCharacter(
+  source: string[],
+  index: number,
+): boolean {
   const character = source[index] ?? "";
   if (isUnreadableCharacter(character)) return true;
-  return isLineStrokeCharacter(character) && hasJapaneseNeighbors(source, index);
+  return (
+    isLineStrokeCharacter(character) && hasJapaneseNeighbors(source, index)
+  );
 }
 
 function isLineStrokeCharacter(character: string): boolean {
@@ -475,11 +645,17 @@ function isVerticalStrokeCharacter(character: string): boolean {
   return /[|｜│┃︱︳∣丨]/u.test(character);
 }
 
-function isUnmatchedBoundaryCharacter(source: string[], index: number): boolean {
+function isUnmatchedBoundaryCharacter(
+  source: string[],
+  index: number,
+): boolean {
   return unmatchedBoundaryKind(source, index) !== undefined;
 }
 
-function unmatchedBoundaryKind(source: string[], index: number): "start" | "end" | undefined {
+function unmatchedBoundaryKind(
+  source: string[],
+  index: number,
+): "start" | "end" | undefined {
   if (!isUnreadableCharacter(source[index] ?? "")) return undefined;
   let first = 0;
   let last = source.length - 1;
@@ -495,7 +671,8 @@ function lastIndexOfCharacter(
   predicate: (character: string) => boolean,
 ): number {
   for (let index = characters.length - 1; index >= 0; index -= 1) {
-    if (predicate(characters[index]?.character ?? "")) return characters[index]?.index ?? -1;
+    if (predicate(characters[index]?.character ?? ""))
+      return characters[index]?.index ?? -1;
   }
   return -1;
 }
@@ -505,7 +682,7 @@ function isClosingQuoteCharacter(character: string): boolean {
 }
 
 function isOpeningDelimiterCharacter(character: string): boolean {
-  return /[「『“"（(【［\[{〈《:：|｜│┃︱︳∣丨\-－―—–‐‑−─━]/u.test(character);
+  return /[「『“"（(【［[{〈《:：|｜│┃︱︳∣丨\-－―—–‐‑−─━]/u.test(character);
 }
 
 function hasJapaneseNeighbors(source: string[], index: number): boolean {
@@ -519,7 +696,11 @@ function adjacentNonWhitespaceCharacter(
   index: number,
   step: -1 | 1,
 ): string {
-  for (let cursor = index + step; cursor >= 0 && cursor < source.length; cursor += step) {
+  for (
+    let cursor = index + step;
+    cursor >= 0 && cursor < source.length;
+    cursor += step
+  ) {
     const character = source[cursor] ?? "";
     if (!/\s/u.test(character)) return character;
   }
@@ -527,8 +708,12 @@ function adjacentNonWhitespaceCharacter(
 }
 
 function isJapaneseScriptCharacter(character: string): boolean {
-  return !isUnreadableCharacter(character) &&
-    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ]/u.test(character);
+  return (
+    !isUnreadableCharacter(character) &&
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵ]/u.test(
+      character,
+    )
+  );
 }
 
 function isAmbiguousSpeakerQuoteMarker(character: string): boolean {

@@ -23,7 +23,7 @@
 .progress-copy {
   display: flex;
   align-items: baseline;
-  gap: .375rem;
+  gap: 0.375rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -38,14 +38,14 @@
 }
 
 .heading h1 {
-  margin: .25rem 0 0;
+  margin: 0.25rem 0 0;
   font-size: clamp(1.5rem, 3vw, 1.875rem);
   font-weight: var(--weight-heading);
 }
 
 .heading h1 span {
   color: var(--muted-color);
-  font-size: .8em;
+  font-size: 0.8em;
 }
 
 .meta,
@@ -55,7 +55,7 @@
 }
 
 .correction-reminder {
-  margin-bottom: .75rem;
+  margin-bottom: 0.75rem;
 }
 
 .layout {
@@ -74,17 +74,17 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: .75rem;
+  margin-bottom: 0.75rem;
 }
 
 .page-tag {
   color: var(--muted-color);
-  font-size: .875rem;
+  font-size: 0.875rem;
 }
 
 .script-stream {
   display: grid;
-  gap: .75rem;
+  gap: 0.75rem;
 }
 
 .context-stream {
@@ -94,16 +94,16 @@
 .script-block {
   display: grid;
   grid-template-columns: 7rem minmax(0, 1fr);
-  gap: .75rem;
+  gap: 0.75rem;
   padding: var(--card-padding-block) var(--card-padding-inline);
   border: 1px solid var(--border-color);
   background: var(--surface-color);
 }
 
 .script-position {
-  padding-top: .25rem;
+  padding-top: 0.25rem;
   color: var(--muted-color);
-  font-size: .8rem;
+  font-size: 0.8rem;
 }
 
 .script-block p {
@@ -132,7 +132,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: .75rem;
+  gap: 0.75rem;
   margin: 1rem 0 0;
   padding: var(--card-padding-block) var(--card-padding-inline);
   border: 1px solid var(--border-color);
@@ -149,7 +149,7 @@
 }
 
 .hidden-hint {
-  font-size: .875rem;
+  font-size: 0.875rem;
 }
 
 .reveal-button {
@@ -165,11 +165,11 @@
 }
 
 .answer-section-heading {
-  margin-bottom: .5rem;
+  margin-bottom: 0.5rem;
 }
 
 .answer-section-heading h2 {
-  margin: .25rem 0 0;
+  margin: 0.25rem 0 0;
   font-size: var(--type-title);
   font-weight: var(--weight-heading);
 }
@@ -192,7 +192,7 @@
 }
 
 .next-speech-missing p {
-  margin: .375rem 0 0;
+  margin: 0.375rem 0 0;
   color: var(--muted-color);
 }
 
@@ -201,7 +201,7 @@
 }
 
 .after-extra > :global(.small-label) {
-  margin-bottom: .25rem;
+  margin-bottom: 0.25rem;
 }
 
 .range-details {
@@ -217,7 +217,7 @@
 .range-control {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: .375rem 1rem;
+  gap: 0.375rem 1rem;
 }
 
 .range-control small {
@@ -237,7 +237,7 @@
 
 .side-panel {
   display: grid;
-  gap: .75rem;
+  gap: 0.75rem;
 }
 
 .side-card {
@@ -249,7 +249,7 @@
 .mini-progress {
   height: 6px;
   overflow: hidden;
-  margin: .75rem 0 .5rem;
+  margin: 0.75rem 0 0.5rem;
   border-radius: var(--shape-small);
   background: var(--surface-muted);
 }
@@ -264,12 +264,12 @@
 .source-card p {
   margin: 0;
   color: var(--muted-color);
-  font-size: .875rem;
+  font-size: 0.875rem;
 }
 
 .source-card button {
   width: 100%;
-  margin-top: .75rem;
+  margin-top: 0.75rem;
 }
 
 .source-preview {
@@ -283,10 +283,10 @@
 .navigation {
   position: sticky;
   z-index: 2;
-  bottom: calc(.5rem + env(safe-area-inset-bottom));
+  bottom: calc(0.5rem + env(safe-area-inset-bottom));
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: .75rem;
+  gap: 0.75rem;
   margin-top: 1rem;
   padding: var(--card-padding-block) var(--card-padding-inline);
   border: 1px solid var(--border-color);
@@ -299,9 +299,9 @@
 }
 
 .keyboard-help {
-  margin: .75rem 0 0;
+  margin: 0.75rem 0 0;
   color: var(--muted-color);
-  font-size: .8rem;
+  font-size: 0.8rem;
   text-align: center;
 }
 
@@ -335,7 +335,7 @@
 
   .script-block {
     grid-template-columns: 5rem minmax(0, 1fr);
-    gap: .5rem;
+    gap: 0.5rem;
   }
 
   .side-panel {
@@ -344,14 +344,14 @@
 
   .navigation {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: .5rem;
-    padding: .75rem;
+    gap: 0.5rem;
+    padding: 0.75rem;
   }
 
   .navigation > * {
     min-width: 0;
-    padding-right: .5rem;
-    padding-left: .5rem;
+    padding-right: 0.5rem;
+    padding-left: 0.5rem;
     white-space: normal;
   }
 }

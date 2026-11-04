@@ -38,13 +38,23 @@ export interface SourceBlock {
   /** Role names that speak together on this line. */
   coSpeakers?: string[];
   boundaryRoleId?: string | null;
-  boundaryOrigin?: { blockId: string; text: string; offset: number; labelLength?: number };
+  boundaryOrigin?: {
+    blockId: string;
+    text: string;
+    offset: number;
+    labelLength?: number;
+  };
   /** A standalone source token visually associated with a neighboring speaker label. */
   isSpeakerSuffix?: boolean;
   /** OCR confidence from 0 to 100 when this block came from image recognition. */
   recognitionConfidence?: number;
   /** OCR word-center span on the cross axis, used to reject lines spanning multiple columns. */
-  recognitionBounds?: { xMin: number; yMin: number; xMax: number; yMax: number };
+  recognitionBounds?: {
+    xMin: number;
+    yMin: number;
+    xMax: number;
+    yMax: number;
+  };
 }
 
 export interface SourcePage {

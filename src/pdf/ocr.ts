@@ -35,9 +35,11 @@ export class OcrInitializationError extends Error {
 export async function createLocalOcrReader(
   onProgress: (progress: OcrProgress) => void,
 ): Promise<LocalOcrReader> {
-  const { createWorker } = await import("tesseract.js").catch((cause: unknown) => {
-    throw new OcrInitializationError(cause);
-  });
+  const { createWorker } = await import("tesseract.js").catch(
+    (cause: unknown) => {
+      throw new OcrInitializationError(cause);
+    },
+  );
   const assetBase = `${import.meta.env.BASE_URL}ocr/`;
   let worker: Awaited<ReturnType<typeof createWorker>> | null = null;
   let workerDirection: ReadingDirection | null = null;
@@ -47,18 +49,20 @@ export async function createLocalOcrReader(
     if (worker) await worker.terminate();
     worker = null;
 
-    worker = await new Promise<Awaited<ReturnType<typeof createWorker>>>((resolve, reject) => {
-      void createWorker(direction === "vertical" ? "jpn_vert" : "jpn", 1, {
-        workerPath: `${assetBase}worker.min.js`,
-        corePath: `${assetBase}core/`,
-        langPath: `${assetBase}languages/`,
-        workerBlobURL: false,
-        cacheMethod: "none",
-        gzip: true,
-        logger: ({ status, progress }) => onProgress({ status, progress }),
-        errorHandler: reject,
-      }).then(resolve, reject);
-    }).catch((cause: unknown) => {
+    worker = await new Promise<Awaited<ReturnType<typeof createWorker>>>(
+      (resolve, reject) => {
+        void createWorker(direction === "vertical" ? "jpn_vert" : "jpn", 1, {
+          workerPath: `${assetBase}worker.min.js`,
+          corePath: `${assetBase}core/`,
+          langPath: `${assetBase}languages/`,
+          workerBlobURL: false,
+          cacheMethod: "none",
+          gzip: true,
+          logger: ({ status, progress }) => onProgress({ status, progress }),
+          errorHandler: reject,
+        }).then(resolve, reject);
+      },
+    ).catch((cause: unknown) => {
       throw new OcrInitializationError(cause);
     });
     workerDirection = direction;
@@ -85,23 +89,28 @@ export async function createLocalOcrReader(
         });
         await renderTask.promise;
 
-        const ocrCanvas = direction === "vertical"
-          ? rotateCounterClockwise(source)
-          : source;
+        const ocrCanvas =
+          direction === "vertical" ? rotateCounterClockwise(source) : source;
         try {
           const activeWorker = await ensureWorker(direction);
-          const result = await activeWorker.recognize(ocrCanvas, {}, { blocks: true });
+          const result = await activeWorker.recognize(
+            ocrCanvas,
+            {},
+            { blocks: true },
+          );
           const confidence = result.data.confidence;
-          const lines = collectLines(result.data.blocks ?? []).map((line) =>
-            removeMarginalPageNumber(
-              line,
-              pageNumber,
-              direction,
-              source.width,
-              pageViewport.width,
-              pageViewport.height,
+          const lines = collectLines(result.data.blocks ?? [])
+            .map((line) =>
+              removeMarginalPageNumber(
+                line,
+                pageNumber,
+                direction,
+                source.width,
+                pageViewport.width,
+                pageViewport.height,
+              ),
             )
-          ).filter((line) => line.text.trim().length > 0);
+            .filter((line) => line.text.trim().length > 0);
           const recognizedCharacters = lines.reduce(
             (sum, line) => sum + Array.from(line.text.trim()).length,
             0,
@@ -123,25 +132,28 @@ export async function createLocalOcrReader(
           const blocks: SourceBlock[] = orderedLines.flatMap((line, index) => {
             const rotatedCenterX = (line.bbox.x0 + line.bbox.x1) / 2;
             const rotatedCenterY = (line.bbox.y0 + line.bbox.y1) / 2;
-            const x = direction === "vertical"
-              ? (pageWidthPixels - rotatedCenterY) / OCR_SCALE
-              : rotatedCenterX / OCR_SCALE;
-            const y = direction === "vertical"
-              ? pageViewport.height - rotatedCenterX / OCR_SCALE
-              : pageViewport.height - rotatedCenterY / OCR_SCALE;
-            const recognitionBounds = direction === "vertical"
-              ? {
-                  xMin: (pageWidthPixels - line.bbox.y1) / OCR_SCALE,
-                  yMin: pageViewport.height - line.bbox.x1 / OCR_SCALE,
-                  xMax: (pageWidthPixels - line.bbox.y0) / OCR_SCALE,
-                  yMax: pageViewport.height - line.bbox.x0 / OCR_SCALE,
-                }
-              : {
-                  xMin: line.bbox.x0 / OCR_SCALE,
-                  yMin: pageViewport.height - line.bbox.y1 / OCR_SCALE,
-                  xMax: line.bbox.x1 / OCR_SCALE,
-                  yMax: pageViewport.height - line.bbox.y0 / OCR_SCALE,
-                };
+            const x =
+              direction === "vertical"
+                ? (pageWidthPixels - rotatedCenterY) / OCR_SCALE
+                : rotatedCenterX / OCR_SCALE;
+            const y =
+              direction === "vertical"
+                ? pageViewport.height - rotatedCenterX / OCR_SCALE
+                : pageViewport.height - rotatedCenterY / OCR_SCALE;
+            const recognitionBounds =
+              direction === "vertical"
+                ? {
+                    xMin: (pageWidthPixels - line.bbox.y1) / OCR_SCALE,
+                    yMin: pageViewport.height - line.bbox.x1 / OCR_SCALE,
+                    xMax: (pageWidthPixels - line.bbox.y0) / OCR_SCALE,
+                    yMax: pageViewport.height - line.bbox.x0 / OCR_SCALE,
+                  }
+                : {
+                    xMin: line.bbox.x0 / OCR_SCALE,
+                    yMin: pageViewport.height - line.bbox.y1 / OCR_SCALE,
+                    xMax: line.bbox.x1 / OCR_SCALE,
+                    yMax: pageViewport.height - line.bbox.y0 / OCR_SCALE,
+                  };
             const wordCenterBounds = lineWordCenterBounds(
               line,
               direction,
@@ -155,41 +167,58 @@ export async function createLocalOcrReader(
               recognitionBounds.yMin = wordCenterBounds.min;
               recognitionBounds.yMax = wordCenterBounds.max;
             }
-            if (isMarginalPageNumber(line.text, x, y, pageViewport.width, pageViewport.height, pageNumber)) {
+            if (
+              isMarginalPageNumber(
+                line.text,
+                x,
+                y,
+                pageViewport.width,
+                pageViewport.height,
+                pageNumber,
+              )
+            ) {
               return [];
             }
-            const speaker = direction === "vertical"
-              ? findOcrSpeakerLabel(line)
-              : undefined;
+            const speaker =
+              direction === "vertical" ? findOcrSpeakerLabel(line) : undefined;
             const speakerLabel = speaker?.label;
-            const normalizedText = normalizeScriptPunctuation(line.text, speakerLabel);
-            const text = speakerLabel && normalizedText.startsWith(speakerLabel)
-              ? normalizedText.slice(speakerLabel.length).trimStart()
-              : normalizedText;
+            const normalizedText = normalizeScriptPunctuation(
+              line.text,
+              speakerLabel,
+            );
+            const text =
+              speakerLabel && normalizedText.startsWith(speakerLabel)
+                ? normalizedText.slice(speakerLabel.length).trimStart()
+                : normalizedText;
 
-            return [{
-              id: `p${pageNumber}-ocr-b${index + 1}`,
-              pageNumber,
-              orderOnPage: index + 1,
-              direction,
-              rawText: normalizedText.trim(),
-              text,
-              x,
-              y,
-              fontSize: (line.bbox.y1 - line.bbox.y0) / OCR_SCALE,
-              itemIds: [],
-              recognitionConfidence: line.confidence,
-              recognitionBounds,
-              ...(speakerLabel ? { speakerLabel, speakerEvidence: speaker?.evidence } : {}),
-            }];
+            return [
+              {
+                id: `p${pageNumber}-ocr-b${index + 1}`,
+                pageNumber,
+                orderOnPage: index + 1,
+                direction,
+                rawText: normalizedText.trim(),
+                text,
+                x,
+                y,
+                fontSize: (line.bbox.y1 - line.bbox.y0) / OCR_SCALE,
+                itemIds: [],
+                recognitionConfidence: line.confidence,
+                recognitionBounds,
+                ...(speakerLabel
+                  ? { speakerLabel, speakerEvidence: speaker?.evidence }
+                  : {}),
+              },
+            ];
           });
 
           blocks.forEach((block, index) => {
             const next = blocks[index + 1];
             if (!next) return;
-            block.visualGapAfter = direction === "vertical"
-              ? Math.abs(block.x - next.x)
-              : Math.abs(block.y - next.y);
+            block.visualGapAfter =
+              direction === "vertical"
+                ? Math.abs(block.x - next.x)
+                : Math.abs(block.y - next.y);
           });
 
           return {
@@ -263,7 +292,9 @@ function lineWordCenterBounds(
   pageWidthPixels: number,
   pageHeight: number,
 ): { min: number; max: number } | undefined {
-  const words = (line.words ?? []).filter((word) => word.text.trim().length > 0);
+  const words = (line.words ?? []).filter(
+    (word) => word.text.trim().length > 0,
+  );
   if (words.length === 0) return undefined;
 
   const centers = words.map((word) => {
@@ -290,7 +321,8 @@ function removeMarginalPageNumber(
   if (words.length === 0) return line;
 
   const boundaryWords = [words[0], words.at(-1)].filter(
-    (word, index, candidates): word is OcrWord => Boolean(word) && candidates.indexOf(word) === index,
+    (word, index, candidates): word is OcrWord =>
+      Boolean(word) && candidates.indexOf(word) === index,
   );
   const pageNumberWord = boundaryWords.find((word) => {
     const normalized = word.text.normalize("NFKC").replace(/[\s\u3000]/gu, "");
@@ -298,12 +330,14 @@ function removeMarginalPageNumber(
 
     const centerX = (word.bbox.x0 + word.bbox.x1) / 2;
     const centerY = (word.bbox.y0 + word.bbox.y1) / 2;
-    const x = direction === "vertical"
-      ? (pageWidthPixels - centerY) / OCR_SCALE
-      : centerX / OCR_SCALE;
-    const y = direction === "vertical"
-      ? pageHeight - centerX / OCR_SCALE
-      : pageHeight - centerY / OCR_SCALE;
+    const x =
+      direction === "vertical"
+        ? (pageWidthPixels - centerY) / OCR_SCALE
+        : centerX / OCR_SCALE;
+    const y =
+      direction === "vertical"
+        ? pageHeight - centerX / OCR_SCALE
+        : pageHeight - centerY / OCR_SCALE;
     return isNearPageEdge(x, y, pageWidth, pageHeight);
   });
   if (!pageNumberWord) return line;
@@ -314,14 +348,20 @@ function removeMarginalPageNumber(
   const prefix = prefixPattern.exec(line.text);
   const isLastWord = words.at(-1) === pageNumberWord;
   const match = isLastWord ? suffix : prefix;
-  if (!match || !isPageNumberToken(match[0].normalize("NFKC").trim(), pageNumber)) return line;
+  if (
+    !match ||
+    !isPageNumberToken(match[0].normalize("NFKC").trim(), pageNumber)
+  )
+    return line;
 
-  const cleanedText = (isLastWord
-    ? line.text.slice(0, match.index)
-    : line.text.slice(match[0].length)
+  const cleanedText = (
+    isLastWord
+      ? line.text.slice(0, match.index)
+      : line.text.slice(match[0].length)
   ).trim();
   const remainingWords = isLastWord ? words.slice(0, -1) : words.slice(1);
-  if (remainingWords.length === 0) return { ...line, text: cleanedText, words: [] };
+  if (remainingWords.length === 0)
+    return { ...line, text: cleanedText, words: [] };
 
   const bbox = remainingWords.reduce(
     (combined, word) => ({
@@ -340,8 +380,10 @@ function isPageNumberToken(value: string, pageNumber: number): boolean {
   if (Number(value) === pageNumber) return true;
 
   const expected = String(pageNumber);
-  return value.length < expected.length &&
-    (expected.startsWith(value) || expected.endsWith(value));
+  return (
+    value.length < expected.length &&
+    (expected.startsWith(value) || expected.endsWith(value))
+  );
 }
 
 function isNearPageEdge(
@@ -352,24 +394,52 @@ function isNearPageEdge(
 ): boolean {
   const horizontalMargin = pageWidth * 0.15;
   const verticalMargin = pageHeight * 0.15;
-  return x <= horizontalMargin ||
+  return (
+    x <= horizontalMargin ||
     x >= pageWidth - horizontalMargin ||
     y <= verticalMargin ||
-    y >= pageHeight - verticalMargin;
+    y >= pageHeight - verticalMargin
+  );
 }
 
 const OCR_ROLE_NAME_CHARACTER = String.raw`(?:(?![\u3400-\u4dbf])[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー])`;
 const OCR_ROLE_MEMBER = String.raw`${OCR_ROLE_NAME_CHARACTER}{1,8}`;
 const OCR_ROLE_SEPARATOR = String.raw`[、,，・&＆/／]`;
-const OCR_ROLE_LABEL = new RegExp(`^${OCR_ROLE_MEMBER}(?:${OCR_ROLE_SEPARATOR}${OCR_ROLE_MEMBER})*$`, "u");
-const OCR_ROLE_LABEL_CHARACTER =
-  String.raw`[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー・、,，&＆/／]`;
+const OCR_ROLE_LABEL = new RegExp(
+  `^${OCR_ROLE_MEMBER}(?:${OCR_ROLE_SEPARATOR}${OCR_ROLE_MEMBER})*$`,
+  "u",
+);
+const OCR_ROLE_LABEL_CHARACTER = String.raw`[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー・、,，&＆/／]`;
 const OCR_OPENING_MARKERS = new Set([
-  "「", "『", "“", '\"', ":", "：", "|", "｜", "│", "┃", "︱", "︳", "∣", "丨",
-  "-", "－", "―", "—", "–", "‐", "‑", "−", "─", "━",
+  "「",
+  "『",
+  "“",
+  '"',
+  ":",
+  "：",
+  "|",
+  "｜",
+  "│",
+  "┃",
+  "︱",
+  "︳",
+  "∣",
+  "丨",
+  "-",
+  "－",
+  "―",
+  "—",
+  "–",
+  "‐",
+  "‑",
+  "−",
+  "─",
+  "━",
 ]);
 
-function findOcrSpeakerLabel(line: OcrLine): { label: string; evidence: "layout" | "quotation" } | undefined {
+function findOcrSpeakerLabel(
+  line: OcrLine,
+): { label: string; evidence: "layout" | "quotation" } | undefined {
   const normalizedText = normalizeScriptText(line.text);
   const words = line.words ?? [];
   if (words.length < 2) return findQuotedOcrSpeakerLabel(normalizedText);
@@ -381,14 +451,18 @@ function findOcrSpeakerLabel(line: OcrLine): { label: string; evidence: "layout"
   for (let index = 0; index < words.length - 1; index += 1) {
     label += words[index].text;
     const normalizedLabel = normalizeScriptText(label);
-    if (!OCR_ROLE_LABEL.test(normalizedLabel)) return findQuotedOcrSpeakerLabel(normalizedText);
+    if (!OCR_ROLE_LABEL.test(normalizedLabel))
+      return findQuotedOcrSpeakerLabel(normalizedText);
     const current = words[index].bbox;
     const next = words[index + 1].bbox;
     const gap = Math.max(next.x0 - current.x1, current.x0 - next.x1, 0);
     if (gap >= gapThreshold) {
       const latinSuffix = normalizeScriptText(words[index + 1].text);
       const combined = normalizeScriptText(label + words[index + 1].text);
-      const hasJapanese = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(normalizedLabel);
+      const hasJapanese =
+        /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(
+          normalizedLabel,
+        );
       if (
         hasJapanese &&
         /^[\p{Script=Latin}\p{Number}０-９]{1,3}$/u.test(latinSuffix) &&
@@ -402,17 +476,25 @@ function findOcrSpeakerLabel(line: OcrLine): { label: string; evidence: "layout"
   return findQuotedOcrSpeakerLabel(normalizedText);
 }
 
-function findQuotedOcrSpeakerLabel(normalizedText: string): { label: string; evidence: "quotation" } | undefined {
-  for (let index = 1; index < normalizedText.length;) {
-    const character = String.fromCodePoint(normalizedText.codePointAt(index) ?? 0);
+function findQuotedOcrSpeakerLabel(
+  normalizedText: string,
+): { label: string; evidence: "quotation" } | undefined {
+  for (let index = 1; index < normalizedText.length; ) {
+    const character = String.fromCodePoint(
+      normalizedText.codePointAt(index) ?? 0,
+    );
     if (OCR_OPENING_MARKERS.has(character)) {
       const label = normalizedText.slice(0, index).trim();
       if (OCR_ROLE_LABEL.test(label)) return { label, evidence: "quotation" };
     }
     index += character.length;
   }
-  const quotedLabel = new RegExp(`^(${OCR_ROLE_LABEL_CHARACTER}{1,24})(?=[「『“\"])`, "u").exec(normalizedText);
-  if (quotedLabel?.[1] && OCR_ROLE_LABEL.test(quotedLabel[1])) return { label: quotedLabel[1], evidence: "quotation" };
+  const quotedLabel = new RegExp(
+    `^(${OCR_ROLE_LABEL_CHARACTER}{1,24})(?=[「『“"])`,
+    "u",
+  ).exec(normalizedText);
+  if (quotedLabel?.[1] && OCR_ROLE_LABEL.test(quotedLabel[1]))
+    return { label: quotedLabel[1], evidence: "quotation" };
 
   return undefined;
 }

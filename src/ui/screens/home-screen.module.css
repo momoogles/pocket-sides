@@ -1,0 +1,261 @@
+.root {
+  width: 100%;
+  max-width: 1080px;
+  flex: 0 0 auto;
+  margin: 0 auto;
+  padding: clamp(var(--space-14), 5vw, 4.5rem) var(--space-5);
+}
+
+.root :global(.home-grid) {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1fr);
+  align-items: start;
+  gap: clamp(var(--space-6), 4vw, var(--space-12));
+}
+
+.root :global(.hero-copy) {
+  padding-top: 0;
+}
+
+.root :global(.hero-copy) h1 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--type-headline);
+  font-weight: var(--weight-heading);
+  line-height: 1.25;
+}
+
+.root :global(.hero-copy) h1 span {
+  display: block;
+}
+
+.root :global(.hero-lead) {
+  max-width: 30rem;
+  margin: 0;
+  color: var(--muted-color);
+  line-height: 1.5;
+}
+
+.root :global(.upload-card) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: var(--card-padding-block) var(--card-padding-inline);
+  border: 1px solid var(--border-color);
+  border-radius: var(--shape-small);
+  background: var(--surface-color);
+  text-align: left;
+}
+
+.root :global(.upload-card) p {
+  margin: 0;
+  color: var(--muted-color);
+}
+
+.root :global(.upload-card) :global(.upload-label) {
+  margin: 0;
+  color: var(--text-color);
+  font-size: var(--type-title);
+  font-weight: var(--weight-emphasis);
+}
+
+.root :global(.upload-card) :global(.upload-description) {
+  margin: var(--space-2) 0 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.root :global(.choose-button) {
+  min-width: 9rem;
+  align-self: flex-start;
+  margin-top: var(--space-4);
+}
+
+.root :global(.upload-card) :global(.privacy-note) {
+  max-width: 34rem;
+  margin: var(--space-4) 0 0;
+  text-align: left;
+  color: var(--muted-color);
+  font-size: var(--type-label);
+}
+
+.root :global(.drop-zone-active) {
+  border-color: var(--accent-color);
+  background: var(--accent-soft);
+}
+
+.root :global(.recent-practices) {
+  margin-top: clamp(var(--space-12), 5vw, var(--space-16));
+}
+
+.root :global(.recent-practices-heading) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.root :global(.recent-practices-list) {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.root :global(.recent-practices-item) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--card-padding-block) var(--card-padding-inline);
+  border: 1px solid var(--border-color);
+  background: var(--surface-color);
+}
+
+.root :global(.recent-practices-item) > span {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.root :global(.recent-practices-item) strong {
+  overflow-wrap: anywhere;
+}
+
+.root :global(.recent-practices-actions) {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3) var(--space-5);
+}
+
+.root :global(.recent-practices-actions) > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.root :global(.recent-practices-item) small {
+  color: var(--muted-color);
+  font-size: var(--type-label);
+}
+
+.root :global(.recent-practices) h2 {
+  margin: 0;
+  font-size: var(--type-title);
+  font-weight: var(--weight-emphasis);
+  line-height: 1.4;
+}
+
+.root :global(.steps-strip) {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-6);
+  margin-top: clamp(var(--space-12), 5vw, 3.75rem);
+}
+
+.root :global(.steps-strip) h2 {
+  margin: var(--space-1) 0 0;
+  font-size: 1.125rem;
+  font-weight: var(--weight-heading);
+}
+
+.root :global(.home-steps) {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding-left: 1.4rem;
+}
+
+.root :global(.home-steps) li {
+  padding: 0.125rem 0 0.125rem 0.125rem;
+  color: var(--muted-color);
+}
+
+.footer {
+  margin-top: auto;
+  padding: 0 max(1rem, calc((100vw - 1200px) / 2)) var(--space-4);
+  text-align: right;
+  font-size: 0.75rem;
+  color: var(--muted-color);
+}
+
+.footer a {
+  display: inline-block;
+  padding: var(--space-2) 0;
+  color: inherit;
+  text-decoration: none;
+  text-underline-offset: 0.15em;
+}
+
+.footer a:hover,
+.footer a:focus-visible {
+  text-decoration: underline;
+}
+
+@media (max-width: 640px) {
+  .root {
+    padding-top: 3rem;
+    padding-right: 1rem;
+    padding-bottom: 3rem;
+    padding-left: 1rem;
+  }
+
+  .root :global(.home-grid),
+  .root :global(.steps-strip) {
+    grid-template-columns: 1fr;
+  }
+
+  .root :global(.home-grid) {
+    gap: var(--space-5);
+  }
+
+  .root :global(.hero-copy) {
+    padding-top: 0;
+  }
+
+  .root :global(.steps-strip) {
+    gap: var(--space-4);
+    margin-top: var(--space-10);
+  }
+
+  .root :global(.upload-card) {
+    padding: var(--card-padding-block) var(--card-padding-inline);
+  }
+
+  .root :global(.recent-practices-heading) {
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .root :global(.recent-practices-heading) :global(.text-button) {
+    flex-shrink: 0;
+    font-size: var(--type-label);
+  }
+
+  .root :global(.recent-practices-item) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+    padding: var(--card-padding-block) var(--card-padding-inline);
+  }
+
+  .root :global(.recent-practices-actions) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-content: stretch;
+    gap: var(--space-3);
+  }
+
+  .root :global(.recent-practices-actions) > button:first-child {
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .root :global(.recent-practices) h2 {
+    font-size: 1rem;
+  }
+}

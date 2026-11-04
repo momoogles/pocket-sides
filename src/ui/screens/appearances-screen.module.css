@@ -1,0 +1,117 @@
+.root {
+  flex: 1;
+}
+
+.root :global(.scene-explainer) {
+  margin: 0 0 1rem;
+  color: var(--muted-color);
+}
+
+.root :global(.scene-explainer) p {
+  margin: 0;
+}
+
+.root :global(.appearance-groups) {
+  display: grid;
+  gap: 1rem;
+}
+
+.root :global(.scene-group) {
+  min-width: 0;
+}
+
+.root :global(.scene-heading) {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.root :global(.scene-heading) > span:first-child,
+.root :global(.scene-unit-count) {
+  color: var(--muted-color);
+  font-size: 0.875rem;
+}
+
+.root :global(.scene-heading) h2 {
+  margin: 0;
+  font-size: 1.125rem;
+}
+
+.root :global(.scene-unit-count) {
+  margin-left: auto;
+}
+
+.root :global(.appearance-list) {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.root :global(.appearance-row) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(9rem, auto);
+  align-items: center;
+  gap: 1rem;
+  padding: var(--card-padding-block) var(--card-padding-inline);
+  border: 1px solid var(--border-color);
+  background: var(--surface-color);
+}
+
+.root :global(.appearance-copy) strong {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.root :global(.appearance-copy) p {
+  margin: 0.25rem 0 0;
+  color: var(--muted-color);
+  font-size: 0.875rem;
+}
+
+.root :global(.appearance-copy) :global(.appearance-opening-line) {
+  display: -webkit-box;
+  margin-top: 0.375rem;
+  overflow: hidden;
+  color: var(--text-color);
+  font-size: 1rem;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.root :global(.bottom-actions) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+@media (max-width: 640px) {
+  .root :global(.scene-heading) {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .root :global(.scene-unit-count) {
+    margin-left: 0;
+  }
+
+  .root :global(.appearance-row) {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .root :global(.appearance-start) {
+    width: 100%;
+  }
+
+  .root :global(.bottom-actions) {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .root :global(.bottom-actions) :global(.text-button) {
+    align-self: flex-start;
+  }
+}

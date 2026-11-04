@@ -12,7 +12,8 @@ if (window.self === window.top) {
   const heading = document.createElement("h1");
   heading.textContent = "アプリを直接開いてください";
   const description = document.createElement("p");
-  description.textContent = "台本を安全に扱うため、埋め込み画面では利用できません。";
+  description.textContent =
+    "台本を安全に扱うため、埋め込み画面では利用できません。";
   const link = document.createElement("a");
   link.href = import.meta.env.BASE_URL;
   link.target = "_blank";

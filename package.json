@@ -9,7 +9,10 @@
     "predev": "node scripts/copy-pdf-assets.mjs",
     "build": "tsc --noEmit && vite build",
     "prebuild": "node scripts/copy-pdf-assets.mjs",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "check": "biome check ."
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans-jp": "5.3.1",
@@ -17,6 +20,7 @@
     "tesseract.js": "7.0.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.4",
     "typescript": "6.0.3",
     "vite": "8.3.5"
   }
