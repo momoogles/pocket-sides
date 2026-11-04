@@ -822,7 +822,7 @@ function renderHome(): string {
           <p class="upload-description">「PDFを選ぶ」を押すか、ここに台本PDFをドロップしてください。</p>
           <input class="visually-hidden" type="file" id="pdf-input" accept="application/pdf,.pdf" />
           <button class="primary-button choose-button" data-action="choose-pdf">PDFを選ぶ</button>
-          <p class="privacy-note">PDFはこの端末内で読み取り、サーバーには送信しません。練習を始めると、読み取り結果と練習設定をこの端末内にのみ保存します。PDFファイル自体は保存しません。</p>
+          <p class="privacy-note">PDFはこの端末内で読み取り、サーバーには送信しません。練習を始めると、読み取り結果と練習設定をこの端末内にのみ保存します。</p>
         </div>
       </div>
 
@@ -903,7 +903,7 @@ function renderAnalysis(): string {
     <main class="work-page analysis-page">
       ${renderStepHeader("読み取り結果を確認する", "元のPDFと見比べて文字や区切りを直し、練習する役を選びます。")}
       <section class="file-summary-panel">
-        <div class="file-summary-copy"><span class="small-label">開いている台本</span><strong>${escapeHtml(state.fileName)}</strong><p>練習を始めると、読み取り結果と練習設定をこの端末内にのみ保存します。サーバーには送信しません。PDFファイル自体は保存しません。</p></div>
+        <div class="file-summary-copy"><span class="small-label">開いている台本</span><strong>${escapeHtml(state.fileName)}</strong><p>練習を始めると、読み取り結果と練習設定をこの端末内にのみ保存します。サーバーには送信しません。</p></div>
         <div class="file-summary-stats"><span>${state.pages.length}ページ</span><span>${characterCount.toLocaleString("ja-JP")}文字</span></div>
       </section>
 
