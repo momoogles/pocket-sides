@@ -25,10 +25,19 @@ export interface LocalOcrReader {
   terminate: () => Promise<void>;
 }
 
+export class OcrInitializationError extends Error {
+  constructor(cause: unknown) {
+    super("画像解析の準備ができませんでした。", { cause });
+    this.name = "OcrInitializationError";
+  }
+}
+
 export async function createLocalOcrReader(
   onProgress: (progress: OcrProgress) => void,
 ): Promise<LocalOcrReader> {
-  const { createWorker } = await import("tesseract.js");
+  const { createWorker } = await import("tesseract.js").catch((cause: unknown) => {
+    throw new OcrInitializationError(cause);
+  });
   const assetBase = `${import.meta.env.BASE_URL}ocr/`;
   let worker: Awaited<ReturnType<typeof createWorker>> | null = null;
   let workerDirection: ReadingDirection | null = null;
@@ -36,17 +45,23 @@ export async function createLocalOcrReader(
   async function ensureWorker(direction: ReadingDirection) {
     if (worker && workerDirection === direction) return worker;
     if (worker) await worker.terminate();
+    worker = null;
 
-    workerDirection = direction;
-    worker = await createWorker(direction === "vertical" ? "jpn_vert" : "jpn", 1, {
-      workerPath: `${assetBase}worker.min.js`,
-      corePath: `${assetBase}core/`,
-      langPath: `${assetBase}languages/`,
-      workerBlobURL: false,
-      cacheMethod: "none",
-      gzip: true,
-      logger: ({ status, progress }) => onProgress({ status, progress }),
+    worker = await new Promise<Awaited<ReturnType<typeof createWorker>>>((resolve, reject) => {
+      void createWorker(direction === "vertical" ? "jpn_vert" : "jpn", 1, {
+        workerPath: `${assetBase}worker.min.js`,
+        corePath: `${assetBase}core/`,
+        langPath: `${assetBase}languages/`,
+        workerBlobURL: false,
+        cacheMethod: "none",
+        gzip: true,
+        logger: ({ status, progress }) => onProgress({ status, progress }),
+        errorHandler: reject,
+      }).then(resolve, reject);
+    }).catch((cause: unknown) => {
+      throw new OcrInitializationError(cause);
     });
+    workerDirection = direction;
     return worker;
   }
 
@@ -143,9 +158,10 @@ export async function createLocalOcrReader(
             if (isMarginalPageNumber(line.text, x, y, pageViewport.width, pageViewport.height, pageNumber)) {
               return [];
             }
-            const speakerLabel = direction === "vertical"
+            const speaker = direction === "vertical"
               ? findOcrSpeakerLabel(line)
               : undefined;
+            const speakerLabel = speaker?.label;
             const normalizedText = normalizeScriptPunctuation(line.text, speakerLabel);
             const text = speakerLabel && normalizedText.startsWith(speakerLabel)
               ? normalizedText.slice(speakerLabel.length).trimStart()
@@ -164,7 +180,7 @@ export async function createLocalOcrReader(
               itemIds: [],
               recognitionConfidence: line.confidence,
               recognitionBounds,
-              ...(speakerLabel ? { speakerLabel } : {}),
+              ...(speakerLabel ? { speakerLabel, speakerEvidence: speaker?.evidence } : {}),
             }];
           });
 
@@ -353,21 +369,10 @@ const OCR_OPENING_MARKERS = new Set([
   "-", "－", "―", "—", "–", "‐", "‑", "−", "─", "━",
 ]);
 
-function findOcrSpeakerLabel(line: OcrLine): string | undefined {
+function findOcrSpeakerLabel(line: OcrLine): { label: string; evidence: "layout" | "quotation" } | undefined {
   const normalizedText = normalizeScriptText(line.text);
-  for (let index = 1; index < normalizedText.length;) {
-    const character = String.fromCodePoint(normalizedText.codePointAt(index) ?? 0);
-    if (OCR_OPENING_MARKERS.has(character)) {
-      const label = normalizedText.slice(0, index).trim();
-      if (OCR_ROLE_LABEL.test(label)) return label;
-    }
-    index += character.length;
-  }
-  const quotedLabel = new RegExp(`^(${OCR_ROLE_LABEL_CHARACTER}{1,24})(?=[「『“\"])`, "u").exec(normalizedText);
-  if (quotedLabel?.[1] && OCR_ROLE_LABEL.test(quotedLabel[1])) return quotedLabel[1];
-
   const words = line.words ?? [];
-  if (words.length < 2) return undefined;
+  if (words.length < 2) return findQuotedOcrSpeakerLabel(normalizedText);
   const heights = words.map((word) => word.bbox.y1 - word.bbox.y0);
   const typicalHeight = median(heights);
   const gapThreshold = Math.max(10, typicalHeight * 1.8);
@@ -376,7 +381,7 @@ function findOcrSpeakerLabel(line: OcrLine): string | undefined {
   for (let index = 0; index < words.length - 1; index += 1) {
     label += words[index].text;
     const normalizedLabel = normalizeScriptText(label);
-    if (!OCR_ROLE_LABEL.test(normalizedLabel)) return undefined;
+    if (!OCR_ROLE_LABEL.test(normalizedLabel)) return findQuotedOcrSpeakerLabel(normalizedText);
     const current = words[index].bbox;
     const next = words[index + 1].bbox;
     const gap = Math.max(next.x0 - current.x1, current.x0 - next.x1, 0);
@@ -389,11 +394,26 @@ function findOcrSpeakerLabel(line: OcrLine): string | undefined {
         /^[\p{Script=Latin}\p{Number}０-９]{1,3}$/u.test(latinSuffix) &&
         OCR_ROLE_LABEL.test(combined)
       ) {
-        return combined;
+        return { label: combined, evidence: "layout" };
       }
-      return normalizedLabel;
+      return { label: normalizedLabel, evidence: "layout" };
     }
   }
+  return findQuotedOcrSpeakerLabel(normalizedText);
+}
+
+function findQuotedOcrSpeakerLabel(normalizedText: string): { label: string; evidence: "quotation" } | undefined {
+  for (let index = 1; index < normalizedText.length;) {
+    const character = String.fromCodePoint(normalizedText.codePointAt(index) ?? 0);
+    if (OCR_OPENING_MARKERS.has(character)) {
+      const label = normalizedText.slice(0, index).trim();
+      if (OCR_ROLE_LABEL.test(label)) return { label, evidence: "quotation" };
+    }
+    index += character.length;
+  }
+  const quotedLabel = new RegExp(`^(${OCR_ROLE_LABEL_CHARACTER}{1,24})(?=[「『“\"])`, "u").exec(normalizedText);
+  if (quotedLabel?.[1] && OCR_ROLE_LABEL.test(quotedLabel[1])) return { label: quotedLabel[1], evidence: "quotation" };
+
   return undefined;
 }
 
