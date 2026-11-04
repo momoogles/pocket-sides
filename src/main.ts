@@ -437,6 +437,59 @@ function isOcrRecognizedPage(page: SourcePage): boolean {
     page.blocks.some((block) => block.recognitionConfidence !== undefined);
 }
 
+function reconcileOcrSpeakerLabels(sourcePage: SourcePage, recognizedPage: SourcePage): SourcePage {
+  const sourceSpeakers = sourcePage.blocks.flatMap((block) => {
+    if (block.recognitionConfidence !== undefined) return [];
+    const label = block.speakerLabel ?? cueAtStart(block.rawText, recoveredOpeningMarkers)?.name;
+    return label ? [{ block, label }] : [];
+  });
+  if (sourceSpeakers.length === 0) return recognizedPage;
+
+  const matchTolerance = sourceBlockMatchTolerance(sourcePage);
+  let changed = false;
+  const blocks = recognizedPage.blocks.map((recognizedBlock) => {
+    const confidence = recognizedBlock.recognitionConfidence ?? 0;
+    const cue = cueAtStart(recognizedBlock.rawText, recoveredOpeningMarkers);
+    if (!cue || confidence < 60) return recognizedBlock;
+
+    const matchingLabels = new Map<string, string>();
+    for (const sourceSpeaker of sourceSpeakers) {
+      if (!isOneLatinHanSuffixOcrConfusion(sourceSpeaker.label, cue.name, confidence)) continue;
+      if (!isSafeRecognitionMatch(
+        sourcePage,
+        sourceSpeaker.block,
+        { ...recognizedBlock, speakerLabel: cue.name },
+        matchTolerance,
+      )) continue;
+      matchingLabels.set(normalizeAlias(sourceSpeaker.label), sourceSpeaker.label);
+    }
+    if (matchingLabels.size !== 1) return recognizedBlock;
+
+    const sourceSpeakerLabel = matchingLabels.values().next().value as string | undefined;
+    if (!sourceSpeakerLabel) return recognizedBlock;
+    const normalizedRawText = normalizeScriptText(recognizedBlock.rawText);
+    if (!normalizedRawText.startsWith(cue.name)) return recognizedBlock;
+
+    const rawText = normalizeScriptPunctuation(
+      `${sourceSpeakerLabel}${normalizedRawText.slice(cue.name.length)}`,
+      sourceSpeakerLabel,
+    );
+    const text = rawText.startsWith(sourceSpeakerLabel)
+      ? rawText.slice(sourceSpeakerLabel.length).trimStart()
+      : recognizedBlock.text;
+    changed = true;
+    return {
+      ...recognizedBlock,
+      rawText,
+      text,
+      speakerLabel: sourceSpeakerLabel,
+      speakerEvidence: "layout",
+    };
+  });
+
+  return changed ? { ...recognizedPage, blocks } : recognizedPage;
+}
+
 function mergeRecognizedPage(
   sourcePage: SourcePage,
   recognizedPage: SourcePage,
@@ -2259,7 +2312,10 @@ async function readWithOcr(purpose: AppState["ocrPurpose"]): Promise<void> {
         }
         recognizedPages.set(sourcePage.pageNumber, recognizedPage);
         mergeRecognizedPage(sourcePage, recognizedPage, characterMappingEvidence);
-        const preview = mergeRecognizedPage({ ...sourcePage, blocks: [] }, recognizedPage);
+        const preview = reconcileOcrSpeakerLabels(
+          sourcePage,
+          mergeRecognizedPage({ ...sourcePage, blocks: [] }, recognizedPage),
+        );
         if (preview.blocks.some((block) => block.text.trim())) layoutResults.push(preview);
         else failedPages.push(sourcePage.pageNumber);
       } catch (error) {
