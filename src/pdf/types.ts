@@ -1,7 +1,7 @@
 export type ReadingDirection = "vertical" | "horizontal";
 export type RoleEvidence = "quotation" | "layout" | "recovered" | "manual";
 
-export const OCR_RECOGNITION_VERSION = 15;
+export const OCR_RECOGNITION_VERSION = 16;
 
 export interface SourceItem {
   id: string;
@@ -28,6 +28,7 @@ export interface SourceBlock {
   itemIds: string[];
   /** A short label isolated from the following text by PDF layout spacing. */
   speakerLabel?: string;
+  speakerEvidence?: "layout" | "quotation";
   /** Distance to the next source column or row, used as a layout hint. */
   visualGapAfter?: number;
   /** Approximate source font size, used to associate inline Latin letters by position. */
@@ -36,6 +37,8 @@ export interface SourceBlock {
   speakerAliases?: string[];
   /** Role names that speak together on this line. */
   coSpeakers?: string[];
+  boundaryRoleId?: string | null;
+  boundaryOrigin?: { blockId: string; text: string; offset: number; labelLength?: number };
   /** A standalone source token visually associated with a neighboring speaker label. */
   isSpeakerSuffix?: boolean;
   /** OCR confidence from 0 to 100 when this block came from image recognition. */

@@ -1,6 +1,6 @@
 import "./styles.css";
 
-// 埋め込み画面では、台本の読込処理や端末内の保存領域を初期化しません。
+// 埋め込み画面では、台本の読み取りや端末内の保存領域を初期化しません。
 if (window.self === window.top) {
   void import("./main");
 } else {

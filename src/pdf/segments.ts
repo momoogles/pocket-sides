@@ -210,13 +210,45 @@ function collectRoleCandidates(
     });
   }
 
-  return [...candidates.values()]
+  const entries = [...candidates.values()];
+  const layoutRoles = entries.filter(({ role }) => role.evidence === "layout");
+  const layoutOccurrences = layoutRoles.reduce((sum, { role }) => sum + role.occurrenceCount, 0);
+  const quotationOccurrences = entries.filter(({ role }) => role.evidence === "quotation")
+    .reduce((sum, { role }) => sum + role.occurrenceCount, 0);
+  const usesSpacedLabels = layoutRoles.filter(({ role }) => role.occurrenceCount >= 2).length >= 2 &&
+    layoutOccurrences >= 6 && layoutOccurrences >= quotationOccurrences * 2;
+
+  const layoutBlocks = blocks.filter((block) => block.speakerLabel && block.speakerEvidence !== "quotation");
+  const supportedQuotedNames = new Set<string>();
+  if (usesSpacedLabels) {
+    for (const block of blocks) {
+      const cue = cueForBlock(block, recoveredOpeningMarkers);
+      if (cue?.evidence !== "quotation") continue;
+      const peers = layoutBlocks.filter((candidate) => candidate.direction === block.direction &&
+        (candidate.recognitionConfidence !== undefined) === (block.recognitionConfidence !== undefined));
+      const positions = peers.map(speakerAxisStart).sort((a, b) => a - b);
+      if (!positions.length) continue;
+      const expectedStart = positions[Math.floor(positions.length / 2)];
+      if (Math.abs(speakerAxisStart(block) - expectedStart) <= Math.max(6, (block.fontSize ?? 12) * 1.5)) {
+        supportedQuotedNames.add(normalizeAlias(cue.name));
+      }
+    }
+  }
+
+  return entries
     .map(({ role }) => role)
+    .filter((role) => !usesSpacedLabels || role.evidence !== "quotation" || supportedQuotedNames.has(normalizeAlias(role.label)))
     .sort(
       (a, b) =>
         b.occurrenceCount - a.occurrenceCount ||
         a.label.localeCompare(b.label, "ja"),
     );
+}
+
+function speakerAxisStart(block: SourceBlock): number {
+  return block.direction === "vertical"
+    ? block.recognitionBounds?.yMax ?? block.y
+    : block.recognitionBounds?.xMin ?? block.x;
 }
 
 function mergeJointRoleCandidates(candidates: RoleCandidate[]): RoleCandidate[] {
@@ -278,7 +310,7 @@ export function splitInlineSpeakerBlocks(
       ? { name: parsedInitialCue.name, marker: parsedInitialCue.marker }
       : sourceBlock.speakerLabel
         ? { name: sourceBlock.speakerLabel, marker: "" }
-        : quotedCueAtStart(sourceBlock.text, recoveredOpeningMarkers);
+        : undefined;
     let currentLabel = initialCue?.name;
     let currentCoSpeakers = parsedInitialCue?.roles ?? resolveJointSpeakers(currentLabel, roles);
     let cursor = sourceBlock.speakerLabel
@@ -540,7 +572,9 @@ export function splitStageDirectionText(
 
   // 役名の直後に読点があるまとまりを、ト書きの構造として扱う。
   // 内容の単語からセリフかト書きかを推測しない。
-  const startPattern = new RegExp(`(^|[」』。．.!！?？…\\n])(${names.join("|")})([、,，])`, "gu");
+  const name = `(?:${names.join("|")})`;
+  const subjects = `${name}(?:と${name})*`;
+  const startPattern = new RegExp(`(^|[」』。．.!！?？…\\n])${subjects}[、,，]`, "gu");
   const ranges: Array<{ start: number }> = [];
   let match: RegExpExecArray | null;
   while ((match = startPattern.exec(text)) !== null) {
@@ -599,7 +633,8 @@ export function getSpeakerTurns(
   const turns: SpeakerTurn[] = [];
 
   blocks.forEach((block, index) => {
-    const manuallySelectedRoleId = manualSpeakers[block.id];
+    if (block.boundaryRoleId === null) return;
+    const manuallySelectedRoleId = block.boundaryRoleId ?? manualSpeakers[block.id];
     if (!manuallySelectedRoleId && isCastListEntry(block)) return;
     const jointRoles = block.coSpeakers?.length
       ? block.coSpeakers.map((name) => findRoleByName(name, orderedRoles)).filter((role): role is RoleCandidate => Boolean(role))
@@ -679,9 +714,13 @@ export function buildPracticeTargets(
 export function cueAtStart(
   text: string,
   recoveredOpeningMarkers: ReadonlySet<string> = new Set(),
+  roles?: RoleCandidate[],
 ): { name: string; marker: string } | null {
   const cue = quotedCueAtStart(text, recoveredOpeningMarkers);
-  return cue ? { name: cue.name, marker: cue.marker } : null;
+  if (!cue) return null;
+  if (roles && !roles.some((role) => role.aliases.some((alias) =>
+    normalizeAlias(alias) === normalizeAlias(cue.name)))) return null;
+  return { name: cue.name, marker: cue.marker };
 }
 
 export function stripDuplicateSpeakerCue(
@@ -718,8 +757,8 @@ function speakerLabelKey(value: string): string {
 
 export function blockPosition(block: SourceBlock): string {
   return block.direction === "vertical"
-    ? "p." + block.pageNumber + " · 右から" + block.orderOnPage + "列目"
-    : "p." + block.pageNumber + " · 上から" + block.orderOnPage + "行目";
+    ? block.pageNumber + "ページ目 · 右から" + block.orderOnPage + "列目"
+    : block.pageNumber + "ページ目 · 上から" + block.orderOnPage + "行目";
 }
 
 export function hasEnoughText(blocks: SourceBlock[]): boolean {
@@ -733,7 +772,7 @@ function cueForBlock(block: SourceBlock, recoveredOpeningMarkers: ReadonlySet<st
     return {
       name: block.speakerLabel,
       marker: "",
-      evidence: "layout",
+      evidence: block.speakerEvidence ?? "layout",
       ...(block.speakerAliases ? { aliases: block.speakerAliases } : {}),
     };
   }

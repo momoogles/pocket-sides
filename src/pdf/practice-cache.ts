@@ -1,3 +1,4 @@
+import type { BoundaryEdit } from "./boundaries";
 import { OCR_RECOGNITION_VERSION, type RoleCandidate, type SourcePage } from "./types";
 
 const DATABASE_NAME = "oboueru-daihon-local-readings";
@@ -15,6 +16,7 @@ export interface SavedPracticeSettings {
   excludedRoleIds: string[];
   selectedRoleId: string;
   manualSpeakers: Record<string, string>;
+  boundaryEdits?: BoundaryEdit[];
   manualRoleNumber: number;
   corrections: Record<string, string>;
   ranges: Record<string, PracticeRangeSnapshot>;
@@ -80,7 +82,7 @@ export async function listSavedPractices(): Promise<SavedPracticeSummary[]> {
         pageCount: result.pageCount,
         savedAt: result.savedAt,
         fileName: result.fileName,
-        roleLabel: result.settings.roles.find((role) => role.id === result.settings.selectedRoleId)?.label ?? "役名未設定",
+        roleLabel: result.settings.roles.find((role) => role.id === result.settings.selectedRoleId)?.label ?? "役名不明",
       }))
       .sort((a, b) => b.savedAt - a.savedAt);
   } finally {
@@ -200,6 +202,7 @@ function validateSavedPractice(value: unknown, expectedFingerprint: string): Sav
     !settings.selectedRoleId ||
     !settings.roles.some((role) => isRoleCandidate(role) && role.id === settings.selectedRoleId) ||
     !isStringMap(settings.manualSpeakers) ||
+    (settings.boundaryEdits !== undefined && !isBoundaryEdits(settings.boundaryEdits)) ||
     !Number.isInteger(settings.manualRoleNumber) ||
     !isStringMap(settings.corrections) ||
     !isRangeMap(settings.ranges) ||
@@ -210,6 +213,15 @@ function validateSavedPractice(value: unknown, expectedFingerprint: string): Sav
   const pages = record.pages.filter((page): page is SourcePage => isSourcePage(page));
   if (pages.length !== record.pageCount) return null;
   return { ...record, pages, settings } as SavedPractice;
+}
+
+function isBoundaryEdits(value: unknown): value is BoundaryEdit[] {
+  return Array.isArray(value) && value.every((entry) =>
+    entry && typeof entry.blockId === "string" && typeof entry.text === "string" &&
+    Number.isInteger(entry.offset) && entry.offset >= 0 && entry.offset < entry.text.length &&
+    (typeof entry.roleId === "string" || (entry.roleId === null && entry.offset === 0)) &&
+    (entry.speakerText === undefined || (typeof entry.speakerText === "string" && entry.text.slice(entry.offset).startsWith(entry.speakerText))),
+  );
 }
 
 function isRoleCandidate(value: unknown): value is RoleCandidate {

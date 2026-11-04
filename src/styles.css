@@ -84,7 +84,8 @@ strong {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -222,6 +223,26 @@ button:disabled {
   background-repeat: no-repeat;
   background-position: right 0.875rem center;
   background-size: 1rem;
+}
+
+.select-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  color: var(--muted-color);
+}
+
+.select-field > span {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.select-field > .select-input {
+  width: fit-content;
+  max-width: 100%;
+  min-width: min(7.5rem, 100%);
 }
 
 .text-input:focus,
@@ -957,17 +978,6 @@ summary {
   font-size: 0.875rem;
 }
 
-.reading-support {
-  display: grid;
-  gap: var(--space-4);
-  margin: var(--space-4) 0 var(--space-5);
-}
-
-.reading-support > .alert,
-.reading-support > .panel {
-  margin: 0;
-}
-
 .correction-warning-title {
   margin: 0;
   font-size: var(--type-body);
@@ -1011,7 +1021,7 @@ summary {
 }
 
 .image-analysis-section h3 {
-  margin: var(--space-1) 0 0;
+  margin: 0;
   font-size: var(--type-body);
   font-weight: var(--weight-emphasis);
   line-height: 1.5;
@@ -1039,10 +1049,6 @@ summary {
 
 .image-analysis-actions .text-button {
   padding: var(--space-1) 0;
-}
-
-.image-analysis-section > .image-analysis-local-note {
-  margin: var(--space-3) 0 0;
 }
 
 .image-analysis-progress {
@@ -1084,8 +1090,13 @@ summary {
   font-size: var(--type-label);
 }
 
+.layout-preview-lines {
+  max-height: 18rem;
+  overflow: auto;
+}
+
 .image-analysis-error {
-  margin: 0;
+  margin: var(--space-3) 0 0;
 }
 
 .image-analysis-page-note {
@@ -1471,4 +1482,113 @@ summary {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.adjustment-mode-title span {
+  margin-inline-end: var(--space-2);
+  color: var(--muted-color);
+  font-size: var(--type-label);
+}
+
+.manual-adjustment {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-color);
+}
+
+.manual-adjustment > summary {
+  cursor: pointer;
+  font-weight: var(--weight-emphasis);
+}
+
+.script-editor-label {
+  display: block;
+  margin: var(--space-3) 0 var(--space-2);
+  font-weight: var(--weight-emphasis);
+}
+
+.script-editor-surface {
+  position: relative;
+  background: var(--surface-color);
+  border-radius: var(--shape-small);
+}
+
+.full-script-editor,
+.script-editor-highlight-content {
+  line-height: 1.9;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 8;
+}
+
+.full-script-editor {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 30rem;
+  resize: vertical;
+  background: transparent;
+}
+
+.full-script-highlights {
+  position: absolute;
+  inset: 1px;
+  overflow: hidden;
+  pointer-events: none;
+  color: transparent;
+}
+
+.script-editor-highlight-content {
+  box-sizing: border-box;
+  padding: 0.55rem 0.7rem;
+}
+
+.inline-role-highlight {
+  background: var(--accent-soft);
+  border-radius: 0.2em;
+  color: transparent;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.layout-ocr-preview {
+  margin-top: var(--space-4);
+}
+
+.image-analysis-completion {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-color);
+  font-size: var(--type-body);
+}
+
+.image-analysis-completion p {
+  margin: var(--space-2) 0 0;
+  color: var(--muted-color);
+  font-size: var(--type-label);
+  line-height: 1.55;
+}
+
+.script-selection-toolbar {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  width: max-content;
+  max-width: min(28rem, calc(100vw - 16px));
+  padding: var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--shape-small);
+  background: var(--surface-color);
+  box-shadow: 0 4px 16px #0002;
+}
+
+.script-selection-toolbar[hidden] {
+  display: none;
+}
+
+.script-selection-toolbar [hidden] {
+  display: none;
 }

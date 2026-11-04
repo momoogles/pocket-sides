@@ -1,3 +1,4 @@
+import { applyBoundaryEdits, type BoundaryEdit } from "./pdf/boundaries";
 import "@fontsource/ibm-plex-sans-jp/latin-400.css";
 import "@fontsource/ibm-plex-sans-jp/latin-500.css";
 import "@fontsource/ibm-plex-sans-jp/latin-ext-400.css";
@@ -9,7 +10,7 @@ import practiceStyles from "./practice.module.css";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { OCR_RECOGNITION_VERSION } from "./pdf/types";
 import { loadPdf } from "./pdf/extract";
-import { createLocalOcrReader, type OcrProgress } from "./pdf/ocr";
+import { createLocalOcrReader, OcrInitializationError, type OcrProgress } from "./pdf/ocr";
 import { isMarginalPageNumber } from "./pdf/layout";
 import {
   getSavedReading,
@@ -106,6 +107,7 @@ interface AppState {
   excludedRoleIds: Set<string>;
   selectedRoleId: string;
   manualSpeakers: Record<string, string>;
+  boundaryEdits: BoundaryEdit[];
   manualRoleNumber: number;
   previewPage: number;
   previewZoom: number;
@@ -119,7 +121,12 @@ interface AppState {
   ocrProgress: number;
   ocrTotal: number;
   ocrStatus: string;
-  ocrError: string;
+  ocrErrors: Record<"text" | "layout", string>;
+  textOcrCompletion: { pageCount: number; replacedPages: number } | null;
+  ocrPurpose: "layout" | "text";
+  layoutPreview: SourcePage[] | null;
+  ocrAnalysisComplete: boolean;
+  textOcrPreview: { pages: SourcePage[]; corrections: Record<string, string> } | null;
 }
 
 const state: AppState = {
@@ -149,6 +156,7 @@ const state: AppState = {
   excludedRoleIds: new Set(),
   selectedRoleId: "",
   manualSpeakers: {},
+  boundaryEdits: [],
   manualRoleNumber: 0,
   previewPage: 1,
   previewZoom: 1,
@@ -162,7 +170,12 @@ const state: AppState = {
   ocrProgress: 0,
   ocrTotal: 0,
   ocrStatus: "",
-  ocrError: "",
+  ocrErrors: { text: "", layout: "" },
+  textOcrCompletion: null,
+  ocrPurpose: "layout",
+  layoutPreview: null,
+  ocrAnalysisComplete: false,
+  textOcrPreview: null,
 };
 
 const foundRoot = document.querySelector<HTMLDivElement>("#app");
@@ -170,6 +183,7 @@ if (!foundRoot) throw new Error("アプリの表示領域が見つかりませ�
 const root: HTMLDivElement = foundRoot;
 
 let previewTask: ReturnType<PDFPageProxy["render"]> | null = null;
+let boundaryDraft: { source: string; text: string } | null = null;
 let previewGeneration = 0;
 let practiceSaveTimer: number | null = null;
 let notificationTimer: number | null = null;
@@ -180,6 +194,8 @@ let cachedDerivedBlocks: {
   pages: SourcePage[];
   roles: string;
   corrections: string;
+  boundaryEdits: BoundaryEdit[];
+  unedited: SourceBlock[];
   value: SourceBlock[];
 } | null = null;
 let cachedSpeakerTurns: {
@@ -194,6 +210,7 @@ let cachedPracticeTargets: {
   roleId: string;
   value: PracticeTarget[];
 } | null = null;
+const recognizedPageCache = new Map<number, SourcePage>();
 let recoveredOpeningMarkers = new Set<string>();
 let recoveredClosingMarkers = new Set<string>();
 
@@ -230,7 +247,7 @@ function inferredMarkerCorrections(): Record<string, string> {
   return corrections;
 }
 
-function blocks(): SourceBlock[] {
+function blocks(includeBoundaryEdits = true): SourceBlock[] {
   const roleCandidates = usableRoleCandidates();
   const roleSignature = JSON.stringify(roleCandidates.map(({ id, label, aliases, manual }) => [id, label, aliases, manual]));
   const correctionsSignature = JSON.stringify(state.corrections);
@@ -238,10 +255,23 @@ function blocks(): SourceBlock[] {
     cachedDerivedBlocks &&
     cachedDerivedBlocks.pages === state.pages &&
     cachedDerivedBlocks.roles === roleSignature &&
-    cachedDerivedBlocks.corrections === correctionsSignature
-  ) return cachedDerivedBlocks.value;
+    cachedDerivedBlocks.corrections === correctionsSignature &&
+    cachedDerivedBlocks.boundaryEdits === state.boundaryEdits
+  ) return includeBoundaryEdits ? cachedDerivedBlocks.value : cachedDerivedBlocks.unedited;
 
-  const sourceBlocks = rawBlocks();
+  const rawSourceBlocks = rawBlocks();
+  const supportedNames = new Set(detectRoleCandidates(rawSourceBlocks).flatMap((role) => role.aliases.map(normalizeAlias)));
+  const sourceBlocks = rawSourceBlocks.map((block) => {
+    if (block.speakerEvidence !== "quotation" || !block.speakerLabel ||
+      supportedNames.has(normalizeAlias(block.speakerLabel))) return block;
+    return {
+      ...block,
+      text: block.speakerLabel + block.text,
+      speakerLabel: undefined,
+      speakerAliases: undefined,
+      coSpeakers: undefined,
+    };
+  });
   recoveredOpeningMarkers = inferRecoveredOpeningMarkers(sourceBlocks);
   recoveredClosingMarkers = inferRecoveredClosingMarkers(sourceBlocks, recoveredOpeningMarkers);
   const corrected = applySeparatedLatinRoleSuffixes(
@@ -281,14 +311,17 @@ function blocks(): SourceBlock[] {
       ? { ...block, text: stripDuplicateSpeakerCue(block.text, block.speakerLabel, recoveredOpeningMarkers) }
       : block,
   );
-  const result = splitInlineSpeakerBlocks(withoutDuplicateCues, roleCandidates);
+  const unedited = splitInlineSpeakerBlocks(withoutDuplicateCues, roleCandidates);
+  const result = applyBoundaryEdits(unedited, state.boundaryEdits);
   cachedDerivedBlocks = {
     pages: state.pages,
     roles: roleSignature,
     corrections: correctionsSignature,
+    boundaryEdits: state.boundaryEdits,
+    unedited,
     value: result,
   };
-  return result;
+  return includeBoundaryEdits ? result : unedited;
 }
 
 function usableRoleCandidates(): RoleCandidate[] {
@@ -308,7 +341,7 @@ function applySeparatedLatinRoleSuffixes(sourceBlocks: SourceBlock[]): SourceBlo
     if (!block || block.direction !== "vertical") continue;
     const cue = block.speakerLabel
       ? { name: block.speakerLabel }
-      : cueAtStart(block.text, recoveredOpeningMarkers);
+      : cueAtStart(block.text, recoveredOpeningMarkers, usableRoleCandidates());
     if (!cue || !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(cue.name)) continue;
 
     for (const neighborIndex of [index - 1, index + 1]) {
@@ -343,7 +376,7 @@ function applySeparatedLatinRoleSuffixes(sourceBlocks: SourceBlock[]): SourceBlo
     if (block.isSpeakerSuffix) continue;
     const cue = block.speakerLabel
       ? { name: block.speakerLabel }
-      : cueAtStart(block.text, recoveredOpeningMarkers);
+      : cueAtStart(block.text, recoveredOpeningMarkers, usableRoleCandidates());
     if (!cue) continue;
     const inferred = inferredSuffixes.get(normalizeAlias(cue.name));
     if (!inferred) continue;
@@ -404,22 +437,6 @@ function isOcrRecognizedPage(page: SourcePage): boolean {
     page.blocks.some((block) => block.recognitionConfidence !== undefined);
 }
 
-function pagesNeedingOcr(): SourcePage[] {
-  return state.pages.filter(
-    (page) => page.textSource !== "ocr" && pageRequiresOcr(page),
-  );
-}
-
-function pageRequiresOcr(page: SourcePage): boolean {
-  if (page.textSource === "ocr") return false;
-  if (page.blocks.length === 0) return true;
-  const sourceBlocks = page.blocks.filter((block) => block.recognitionConfidence === undefined);
-  if (sourceBlocks.length === 0) return false;
-  return sourceBlocks.some((block) =>
-    !block.text.trim() || findUnusualCharacters([block], {}).length > 0,
-  );
-}
-
 function mergeRecognizedPage(
   sourcePage: SourcePage,
   recognizedPage: SourcePage,
@@ -469,7 +486,7 @@ function mergeRecognizedPage(
     replacedBlockCount += 1;
     const correctedSourceBlock = applyCharacterCorrections([sourceBlock], characterCorrections)[0] ?? sourceBlock;
     const sourceSpeakerLabel = correctedSourceBlock.speakerLabel ??
-      cueAtStart(correctedSourceBlock.text, recoveredOpeningMarkers)?.name ??
+      cueAtStart(correctedSourceBlock.text, recoveredOpeningMarkers, usableRoleCandidates())?.name ??
       (startsWithUnreadableCharacter(correctedSourceBlock.text) ? recognizedBlock.speakerLabel : undefined);
     const speakerLabel = sourceSpeakerLabel;
     const sourceText = !correctedSourceBlock.speakerLabel && sourceSpeakerLabel &&
@@ -583,8 +600,8 @@ function isSafeRecognitionMatch(
     if (crossAxisSpan > maximumCrossAxisSpan) return false;
   }
 
-  const sourceSpeaker = sourceBlock.speakerLabel ?? cueAtStart(sourceBlock.text, recoveredOpeningMarkers)?.name;
-  const recognizedSpeaker = recognizedBlock.speakerLabel ?? cueAtStart(recognizedBlock.text, recoveredOpeningMarkers)?.name;
+  const sourceSpeaker = sourceBlock.speakerLabel ?? cueAtStart(sourceBlock.text, recoveredOpeningMarkers, usableRoleCandidates())?.name;
+  const recognizedSpeaker = recognizedBlock.speakerLabel ?? cueAtStart(recognizedBlock.text, recoveredOpeningMarkers, usableRoleCandidates())?.name;
   if (
     sourceSpeaker &&
     recognizedSpeaker &&
@@ -660,6 +677,9 @@ function renderApp(): void {
     left: previousCanvas?.parentElement?.scrollLeft ?? 0,
     top: previousCanvas?.parentElement?.scrollTop ?? 0,
   };
+  const editorIds = ["manual-boundary-editor", "manual-glyph-editor"];
+  const openEditors = editorIds.filter((id) => root.querySelector<HTMLDetailsElement>(`#${id}`)?.open);
+  const previousEditorScroll = root.querySelector<HTMLTextAreaElement>("#full-script-editor")?.scrollTop ?? 0;
   const previousExtractedScroll = root.querySelector<HTMLElement>(".extracted-lines")?.scrollTop ?? 0;
   const previousPage = state.screen === "practice" ? state.originalPage : state.previewPage;
   const previousScreen = root.dataset.screen;
@@ -675,6 +695,17 @@ function renderApp(): void {
     : null;
 
   root.innerHTML = [renderTopbar(), renderScreen(), renderNotification()].join("");
+  for (const id of openEditors) {
+    const editor = root.querySelector<HTMLDetailsElement>(`#${id}`);
+    if (editor) editor.open = true;
+  }
+  const textEditor = root.querySelector<HTMLTextAreaElement>("#full-script-editor");
+  scriptEditorResizeObserver.disconnect();
+  if (textEditor) {
+    textEditor.scrollTop = previousEditorScroll;
+    scriptEditorResizeObserver.observe(textEditor);
+    syncEditorHighlights();
+  }
   root.querySelector("main")?.toggleAttribute("inert", state.practiceSaveBusy);
   root.dataset.screen = state.loading ? "loading" : state.screen;
   const requestedPage = state.screen === "practice" ? state.originalPage : state.previewPage;
@@ -728,12 +759,13 @@ function goToPreviewPage(pageNumber: number): void {
   const nextPage = Math.max(1, Math.min(state.pages.length, pageNumber));
   if (nextPage === state.previewPage) return;
   state.previewPage = nextPage;
+
   renderApp();
 }
 
 function renderNotification(): string {
   if (state.practiceSaveBusy) {
-    return `<div class="toast-notification toast-info toast-progress" role="status" aria-live="polite"><span class="toast-spinner" aria-hidden="true"></span><p>練習設定をこの端末に保存しています。</p></div>`;
+    return `<div class="toast-notification toast-info toast-progress" role="status" aria-live="polite"><span class="toast-spinner" aria-hidden="true"></span><p>練習設定をこの端末内に保存しています。</p></div>`;
   }
   const notification = state.notification;
   if (!notification) return "";
@@ -782,15 +814,15 @@ function renderHome(): string {
     <main class="home-page">
       <div class="home-grid">
         <section class="hero-copy">
-          <h1><span>台本をひらいて、</span><span>シーンごとに練習しよう</span></h1>
+          <h1><span>台本を開いて、</span><span>シーンごとに練習しよう</span></h1>
           <p class="hero-lead">前のセリフやト書きを読みながら、自分のセリフを思い出して答え合わせできます。</p>
         </section>
         <div class="upload-card" id="drop-zone">
-          <p class="upload-label">台本PDFを読み取る</p>
-          <p class="upload-description">端末から台本PDFを選ぶか、ここにドロップします。</p>
+          <p class="upload-label">台本PDFを開く</p>
+          <p class="upload-description">「PDFを選ぶ」を押すか、ここに台本PDFをドロップしてください。</p>
           <input class="visually-hidden" type="file" id="pdf-input" accept="application/pdf,.pdf" />
           <button class="primary-button choose-button" data-action="choose-pdf">PDFを選ぶ</button>
-          <p class="privacy-note">PDFはブラウザ内で読み取ります。練習を始めると、読み取り結果と設定をこの端末に保存します。PDF自体は保存しません。</p>
+          <p class="privacy-note">PDFはこの端末内で読み取り、サーバーには送信しません。練習を始めると、読み取り結果と練習設定をこの端末内にのみ保存します。</p>
         </div>
       </div>
 
@@ -798,16 +830,16 @@ function renderHome(): string {
         <h2 id="steps-heading">使い方</h2>
         <ol class="home-steps">
           <li>台本PDFを選ぶと、文字をブラウザ内で読み取ります。</li>
-          <li>文字と役名を元のPDFと見比べ、必要なら直します。</li>
+          <li>文字、読み順、セリフの区切り、役名を元のPDFと見比べ、必要に応じて直します。</li>
           <li>役を選び、「練習を始める」を押します。</li>
-          <li>シーンを選び、表示された前のセリフを読みます。</li>
-          <li>自分のセリフを声に出してから「確認する」を押します。原文と次のセリフが表示されます。</li>
+          <li>練習シーンを選び、前のセリフやト書きを読みます。</li>
+          <li>自分のセリフを声に出してから「答えを確認する」を押します。自分のセリフの原文と次のセリフが表示されます。</li>
         </ol>
       </section>
 
       ${recentItems.length > 0 ? `<section class="recent-practices" aria-labelledby="saved-readings-heading">
         <div class="recent-practices-heading"><h2 id="saved-readings-heading">最近おぼえようとした台本</h2><button class="text-button" data-action="delete-all-saved-practices" aria-label="保存した練習設定と読み取り結果をすべて削除">すべて削除</button></div>
-        <ul class="recent-practices-list">${recentItems.map((reading) => `<li class="recent-practices-item"><span><strong>${escapeHtml(reading.fileName || "ファイル名未登録")}</strong><small>${reading.kind === "practice" ? `選択した役：${escapeHtml(reading.roleLabel)} · ${reading.pageCount} ページ` : `${reading.pageCount} ページ · 練習設定は未保存`}</small></span><div class="recent-practices-actions"><button class="${reading.kind === "practice" ? "primary-button" : "secondary-button"}" data-action="${reading.kind === "practice" ? "resume-saved-practice" : "open-saved-reading"}" data-fingerprint="${escapeHtml(reading.fingerprint)}">${reading.kind === "practice" ? "PDFを選んで練習を再開する" : "PDFを選んで設定を作る"}</button><button class="text-button" data-action="delete-saved-practice-from-home" data-fingerprint="${escapeHtml(reading.fingerprint)}">削除</button></div></li>`).join("")}</ul>
+        <ul class="recent-practices-list">${recentItems.map((reading) => `<li class="recent-practices-item"><span><strong>${escapeHtml(reading.fileName || "ファイル名未登録")}</strong><small>${reading.kind === "practice" ? `練習する役：${escapeHtml(reading.roleLabel)} · ${reading.pageCount}ページ` : `${reading.pageCount}ページ · 練習設定は未保存`}</small></span><div class="recent-practices-actions"><button class="${reading.kind === "practice" ? "primary-button" : "secondary-button"}" data-action="${reading.kind === "practice" ? "resume-saved-practice" : "open-saved-reading"}" data-fingerprint="${escapeHtml(reading.fingerprint)}">${reading.kind === "practice" ? "PDFを選んで練習を再開する" : "PDFを選んで設定を作る"}</button><button class="text-button" data-action="delete-saved-practice-from-home" data-fingerprint="${escapeHtml(reading.fingerprint)}">削除</button></div></li>`).join("")}</ul>
       </section>` : ""}
 
     </main>
@@ -821,16 +853,16 @@ function renderLoading(): string {
   return `
     <main class="narrow-page loading-page">
       <h1>${restoringPractice ? "練習設定を復元しています" : "PDFを読み取っています"}</h1>
-      <p>${restoringPractice ? "前回の役と練習範囲を確認しています。" : "ページ数によっては、少し時間がかかることがあります。"}</p>
+      <p>${restoringPractice ? "前回の役と練習範囲を復元しています。" : "ページ数によっては、少し時間がかかることがあります。"}</p>
       <div class="progress-shell"><div class="progress-bar" id="load-progress-bar" style="width:${state.progress}%"></div></div>
-      <p class="progress-copy" id="load-progress-label">${escapeHtml(state.progressLabel || (restoringPractice ? "練習設定を確認しています" : "準備しています"))}</p>
+      <p class="progress-copy" id="load-progress-label">${escapeHtml(state.progressLabel || (restoringPractice ? "練習設定を復元しています" : "準備しています"))}</p>
     </main>`;
 }
 
 function renderLoadError(): string {
   return `
     <main class="narrow-page error-page">
-      <h1>別のPDFで試してください</h1>
+      <h1>PDFを読み取れませんでした</h1>
       <p>${escapeHtml(state.error)}</p>
       <button class="primary-button" data-action="go-home">PDFを選び直す</button>
     </main>`;
@@ -851,7 +883,7 @@ function renderAnalysis(): string {
     ...state.corrections,
   });
   const ocrPageCount = state.pages.filter(isOcrRecognizedPage).length;
-  const ocrCandidateCount = pagesNeedingOcr().length;
+  const currentPage = state.pages[state.previewPage - 1];
   const foundTurns = turns();
   const selectedTurnCount = foundTurns.filter((turn) => turn.roleId === state.selectedRoleId).length;
   const enoughText = hasEnoughText(textBlocks);
@@ -862,103 +894,503 @@ function renderAnalysis(): string {
     state.selectedRoleId &&
       selectedTurnCount > 0 &&
       !state.ocrBusy &&
+      !state.layoutPreview &&
+      !state.textOcrPreview &&
       !state.practiceSaveBusy,
   );
 
   return `
     <main class="work-page analysis-page">
-      ${renderStepHeader("読み取り結果を確認する", "元のPDFと見比べ、練習する役を選びます。")}
+      ${renderStepHeader("読み取り結果を確認する", "元のPDFと見比べて文字や区切りを直し、練習する役を選びます。")}
       <section class="file-summary-panel">
-        <div class="file-summary-copy"><span class="small-label">開いている台本</span><strong>${escapeHtml(state.fileName)}</strong><p>練習を始めると、読み取り結果と設定をこの端末に保存します。PDF自体は保存しません。</p></div>
-        <div class="file-summary-stats"><span>${state.pages.length} ページ</span><span>${characterCount.toLocaleString("ja-JP")} 文字</span></div>
+        <div class="file-summary-copy"><span class="small-label">開いている台本</span><strong>${escapeHtml(state.fileName)}</strong><p>練習を始めると、読み取り結果と練習設定をこの端末内にのみ保存します。サーバーには送信しません。</p></div>
+        <div class="file-summary-stats"><span>${state.pages.length}ページ</span><span>${characterCount.toLocaleString("ja-JP")}文字</span></div>
       </section>
 
-      ${!enoughText ? `<div class="alert alert-warning notice-box" role="alert"><strong>PDFから文字を読み取れませんでした。</strong><p>「画像解析で文字を読み直す」を試してください。読み取った文字は元のPDFと見比べられます。</p></div>` : ""}
+      ${!enoughText ? `<div class="alert alert-warning notice-box" role="alert"><strong>PDFから文字を読み取れませんでした。</strong><p>「文字の置換」の画像解析で、読めなかった文字を補えます。</p></div>` : ""}
 
-      ${renderCorrectionPanel(allGlyphs, ocrCandidateCount, ocrPageCount)}
+      ${renderReadingWarning(allGlyphs, ocrPageCount)}
+
+      <section class="panel source-review-panel" id="source-review">
+        <div class="panel-heading"><div><h2>元のPDFと読み取り結果</h2><p>ページを切り替えて、対応する箇所を見比べられます。</p></div></div>
+        <div class="source-toolbar">
+          <div class="page-navigation" aria-label="PDFのページ移動">
+            <button class="secondary-button page-step-button" data-action="previous-preview-page" aria-label="前のページ" title="前のページ" ${state.previewPage <= 1 ? "disabled" : ""}><span aria-hidden="true">←</span></button>
+            <label class="select-field"><span>表示するページ</span><select class="select-input" id="preview-page-select">${state.pages.map((page) => `<option value="${page.pageNumber}" ${page.pageNumber === state.previewPage ? "selected" : ""}>${page.pageNumber}ページ目</option>`).join("")}</select></label>
+            <button class="secondary-button page-step-button" data-action="next-preview-page" aria-label="次のページ" title="次のページ" ${state.previewPage >= state.pages.length ? "disabled" : ""}><span aria-hidden="true">→</span></button>
+          </div>
+          <div class="zoom-controls"><button class="zoom-button secondary-button" data-action="zoom-out" aria-label="元のPDFを縮小">−</button><span>${Math.round(state.previewZoom * 100)}%</span><button class="zoom-button secondary-button" data-action="zoom-in" aria-label="元のPDFを拡大">＋</button></div>
+        </div>
+        <div class="source-compare-grid">
+          <div class="pdf-preview-card"><span class="preview-label">元のPDF</span><div class="pdf-canvas-scroll"><canvas id="page-canvas" aria-label="元のPDFのページ"></canvas></div></div>
+          <div class="extracted-page-card"><span class="preview-label">読み取り結果</span><div class="extracted-lines">${renderPageBlocks(state.previewPage)}</div></div>
+        </div>
+        ${currentPage && isOcrRecognizedPage(currentPage) ? `
+          <div class="image-analysis-actions">
+            <button class="text-button" data-action="restore-preview-page-text" ${state.ocrBusy || state.layoutPreview ? "disabled" : ""}>このページをPDFからの読み取り結果に戻す</button>
+          </div>` : ""}
+        <p class="panel-footnote">セリフは発話ごとにまとめ、位置はページ番号と列・行の番号で示します。</p>
+      </section>
+
+      ${renderCorrectionPanel(findUnusualCharacters(rawBlocks(), inferredMarkerCorrections()))}
+      ${renderLayoutAdjustment()}
 
       <section class="panel role-panel">
         <div class="panel-heading">
-          <div><span class="small-label">自分の役を選ぶ</span><h2>役名の候補</h2><p>役名を元のPDFと見比べて選びます。必要なら、名前や表記を直せます。</p></div>
-          <span class="count-pill">候補 ${state.roles.length} 件</span>
+          <div><span class="small-label">自分の役を選ぶ</span><h2>役名の候補</h2><p>候補から練習する役を選びます。同じ役の別表記を登録したり、見つからなかった役を追加したりできます。</p></div>
+          <span class="count-pill">候補 ${state.roles.length}件</span>
         </div>
-        ${frequentRoles.length > 0 ? `<div class="role-grid">${frequentRoles.map((role) => renderRoleCard(role, foundTurns, blocksById)).join("")}</div>` : `<div class="empty-state"><strong>繰り返し見つかった役名はありません</strong><p>1回だけ見つかった名前を確認するか、台本を見ながら役名を追加してください。セリフとの対応は、あとから選べます。</p></div>`}
-        ${occasionalRoles.length > 0 ? `<details class="occasional-role-details"><summary>1回だけ見つかった名前も確認する（${occasionalRoles.length} 件）</summary><p>セリフの一部を役名として読み取っている場合があります。元のPDFと照らし合わせて選んでください。</p><div class="role-grid">${occasionalRoles.map((role) => renderRoleCard(role, foundTurns, blocksById)).join("")}</div></details>` : ""}
+        ${frequentRoles.length > 0 ? `<div class="role-grid">${frequentRoles.map((role) => renderRoleCard(role, foundTurns, blocksById)).join("")}</div>` : `<div class="empty-state"><strong>2回以上見つかった役名はありません</strong><p>1回だけ見つかった役名を確認するか、役名を追加してください。「区切りの調整」でセリフに役を指定できます。</p></div>`}
+        ${occasionalRoles.length > 0 ? `<details class="occasional-role-details"><summary>1回だけ見つかった役名を確認する（${occasionalRoles.length}件）</summary><p>セリフの一部を役名として読み取っている場合があります。元のPDFと見比べて選んでください。</p><div class="role-grid">${occasionalRoles.map((role) => renderRoleCard(role, foundTurns, blocksById)).join("")}</div></details>` : ""}
 
         <details class="manual-role-details">
           <summary>見つからない役を追加する</summary>
           <div class="manual-role-form">
             <label>画面に表示する役名<input class="text-input" id="new-role-label" type="text" placeholder="例：役名" maxlength="24" /></label>
-            <label>台本に書かれた名前<input class="text-input" id="new-role-alias" type="text" placeholder="同じ名前でよければ空欄で構いません" maxlength="48" /></label>
+            <label>台本での役名<input class="text-input" id="new-role-alias" type="text" placeholder="同じ名前でよければ空欄で構いません" maxlength="48" /></label>
             <button class="secondary-button" data-action="add-role">役名を追加</button>
           </div>
         </details>
       </section>
 
-      <section class="panel source-review-panel" id="source-review">
-        <div class="panel-heading"><div><span class="small-label">PDFと見比べる</span><h2>原稿の見た目と読み取り結果</h2><p>ページ番号を選ぶと、元のPDFと読み取った文字を並べて確認できます。</p></div></div>
-        <div class="source-toolbar">
-          <div class="page-navigation" aria-label="PDFのページ移動">
-            <button class="secondary-button page-step-button" data-action="previous-preview-page" aria-label="前のページ" title="前のページ" ${state.previewPage <= 1 ? "disabled" : ""}><span aria-hidden="true">←</span></button>
-            <label>ページ<select class="select-input" id="preview-page-select">${state.pages.map((page) => `<option value="${page.pageNumber}" ${page.pageNumber === state.previewPage ? "selected" : ""}>${page.pageNumber} ページ</option>`).join("")}</select></label>
-            <button class="secondary-button page-step-button" data-action="next-preview-page" aria-label="次のページ" title="次のページ" ${state.previewPage >= state.pages.length ? "disabled" : ""}><span aria-hidden="true">→</span></button>
-          </div>
-          <div class="zoom-controls"><button class="zoom-button secondary-button" data-action="zoom-out" aria-label="原稿を縮小">−</button><span>${Math.round(state.previewZoom * 100)}%</span><button class="zoom-button secondary-button" data-action="zoom-in" aria-label="原稿を拡大">＋</button></div>
-        </div>
-        <div class="source-compare-grid">
-          <div class="pdf-preview-card"><span class="preview-label">元のPDF</span><div class="pdf-canvas-scroll"><canvas id="page-canvas" aria-label="元のPDFのページ"></canvas></div></div>
-          <div class="extracted-page-card"><span class="preview-label">読み取った文字</span><div class="extracted-lines">${renderPageBlocks(state.previewPage)}</div></div>
-        </div>
-        <p class="panel-footnote">セリフは発話ごとにまとめ、位置はページ番号と列の範囲で示します。元のPDFは読み取り専用です。</p>
-      </section>
-
       <div class="sticky-action-bar">
-        <p>${state.selectedRoleId ? selectedTurnCount > 0 ? `「${escapeHtml(selectedRole()?.label ?? "")}」のセリフを ${selectedTurnCount} 件見つけました。` : `「${escapeHtml(selectedRole()?.label ?? "")}」のセリフを見つけられませんでした。読み取り結果を直すか、セリフの行を選んでください。` : "練習する役を選んでください。"}</p>
+        <p>${state.selectedRoleId ? selectedTurnCount > 0 ? `「${escapeHtml(selectedRole()?.label ?? "")}」のセリフを ${selectedTurnCount}件見つけました。` : `「${escapeHtml(selectedRole()?.label ?? "")}」のセリフを見つけられませんでした。「区切りの調整」で、セリフが始まる位置と役を指定してください。` : "練習する役を選んでください。"}</p>
         <button class="primary-button" data-action="continue-to-appearances" ${!canContinue || state.practiceSaveBusy ? "disabled" : ""}>${state.practiceHasStarted ? "練習を再開する" : "練習を始める"}</button>
       </div>
     </main>`;
 }
 
-function renderCorrectionPanel(
+function renderReadingWarning(
   glyphs: ReturnType<typeof findUnusualCharacters>,
-  ocrCandidateCount: number,
   ocrPageCount: number,
 ): string {
-  const unresolved = glyphs.filter((entry) => !state.corrections[entry.character]?.trim()).length;
+  if (glyphs.length === 0 && ocrPageCount === 0) return "";
   const occurrenceCount = glyphs.reduce((sum, entry) => sum + entry.count, 0);
-  const needsReview = glyphs.length > 0 || ocrPageCount > 0;
-  const savedCorrectionCount = Object.values(state.savedPractice?.settings.corrections ?? {}).filter((value) => value.trim()).length;
-  const hasOcrSupport = ocrCandidateCount > 0 || state.cachedOcrPages.length > 0 || ocrPageCount > 0;
-  const imageAnalysisProgress = state.ocrBusy ? `
+  return `
+    <section class="alert alert-warning correction-warning" role="alert" aria-labelledby="correction-warning-heading">
+      <h2 id="correction-warning-heading" class="correction-warning-title">読み取り結果を確認してください</h2>
+      <p class="correction-warning-description">${glyphs.length > 0 ? `${occurrenceCount.toLocaleString("ja-JP")}か所に、元のPDFと異なる文字が含まれている可能性があります。` : "画像解析で読み直したページがあります。読み順や役名を元のPDFと見比べてください。"}</p>
+    </section>`;
+}
+
+function renderImageAnalysisProgress(purpose: AppState["ocrPurpose"]): string {
+  return state.ocrBusy && state.ocrPurpose === purpose ? `
     <div class="image-analysis-progress" role="status">
       <p id="image-analysis-progress-label" aria-live="polite">${escapeHtml(state.ocrStatus || "画像解析の準備をしています")}</p>
       <div class="image-analysis-progress-meter">
-        <div class="progress-shell" role="progressbar" aria-label="読み取り済みページ数" aria-valuemin="0" aria-valuemax="${state.ocrTotal}" aria-valuenow="${state.ocrProgress}">
+        <div class="progress-shell" role="progressbar" aria-label="画像解析の進捗" aria-valuemin="0" aria-valuemax="${state.ocrTotal}" aria-valuenow="${state.ocrProgress}">
           <div class="progress-bar" id="image-analysis-progress-bar" style="width:${state.ocrTotal ? Math.round((state.ocrProgress / state.ocrTotal) * 100) : 0}%"></div>
         </div>
-        <span id="image-analysis-progress-count" aria-hidden="true">読み取り済み ${state.ocrProgress} / ${state.ocrTotal} ページ</span>
+        <span id="image-analysis-progress-count" aria-hidden="true">処理済み ${state.ocrProgress} / ${state.ocrTotal}ページ</span>
       </div>
-      <button class="text-button" data-action="cancel-ocr">キャンセル</button>
+      <button class="text-button" data-action="cancel-ocr">画像解析を中止する</button>
     </div>` : "";
+}
+
+interface ScriptEditorSpan {
+  block: SourceBlock;
+  start: number;
+  end: number;
+  prefixLength: number;
+  speakerLength: number;
+  roleId?: string;
+}
+
+function scriptEditorModel(): { text: string; spans: ScriptEditorSpan[]; breaks: Set<number> } {
+  const sourceBlocks = blocks();
+  const starts = new Map(turns().map((turn) => [turn.startIndex, turn.roleId]));
+  const spans: ScriptEditorSpan[] = [];
+  const breaks = new Set<number>();
+  let text = "";
+  let plainOffset = 0;
+  let currentRole: string | undefined;
+  sourceBlocks.forEach((block, index) => {
+    if (block.isSpeakerSuffix || (!block.text && !block.speakerLabel)) return;
+    if (starts.has(index)) {
+      if (text) {
+        text += "\n";
+        breaks.add(plainOffset);
+      }
+      currentRole = starts.get(index);
+    }
+    const prefix = block.speakerLabel ?? "";
+    const content = prefix + block.text;
+    const role = state.roles.find((candidate) => candidate.id === starts.get(index));
+    const speakerLength = starts.has(index)
+      ? prefix.length || role?.aliases.find((alias) => content.startsWith(alias))?.length || 0
+      : 0;
+    spans.push({
+      block,
+      start: plainOffset,
+      end: plainOffset + content.length,
+      prefixLength: prefix.length,
+      speakerLength,
+      roleId: currentRole,
+    });
+    text += content;
+    plainOffset += content.length;
+  });
+  return { text, spans, breaks };
+}
+
+function renderEditorHighlights(text: string, model: ReturnType<typeof scriptEditorModel>): string {
+  if (text.replace(/\n/g, "") !== model.text.replace(/\n/g, "")) return escapeHtml(text);
+  const labels = new Map(model.spans.filter((span) => span.speakerLength > 0)
+    .map((span) => [span.start, span.speakerLength]));
+  const parts: string[] = [];
+  let plainOffset = 0;
+  let unmarkedStart = 0;
+  let index = 0;
+  while (index < text.length) {
+    const labelLength = text[index] === "\n" ? undefined : labels.get(plainOffset);
+    if (labelLength) {
+      parts.push(escapeHtml(text.slice(unmarkedStart, index)));
+      const start = index;
+      let remaining = labelLength;
+      while (index < text.length && remaining > 0) {
+        if (text[index] !== "\n") {
+          remaining -= 1;
+          plainOffset += 1;
+        }
+        index += 1;
+      }
+      parts.push(`<mark class="inline-role-highlight">${escapeHtml(text.slice(start, index))}</mark>`);
+      unmarkedStart = index;
+    } else {
+      if (text[index] !== "\n") plainOffset += 1;
+      index += 1;
+    }
+  }
+  parts.push(escapeHtml(text.slice(unmarkedStart)));
+  return parts.join("") + "\n";
+}
+
+function syncEditorHighlights(): void {
+  const editor = root.querySelector<HTMLTextAreaElement>("#full-script-editor");
+  const highlights = root.querySelector<HTMLElement>("#full-script-highlights");
+  const content = highlights?.firstElementChild;
+  if (!editor || !highlights || !(content instanceof HTMLElement)) return;
+  content.style.width = `${editor.clientWidth}px`;
+  highlights.scrollTop = editor.scrollTop;
+  highlights.scrollLeft = editor.scrollLeft;
+}
+
+const scriptEditorResizeObserver = new ResizeObserver(syncEditorHighlights);
+
+function hideScriptSelectionToolbar(): void {
+  const toolbar = root.querySelector<HTMLElement>("#script-selection-toolbar");
+  if (toolbar) toolbar.hidden = true;
+}
+
+function showScriptSelectionToolbar(point?: { x: number; y: number }): void {
+  const editor = root.querySelector<HTMLTextAreaElement>("#full-script-editor");
+  const toolbar = root.querySelector<HTMLElement>("#script-selection-toolbar");
+  const label = root.querySelector<HTMLElement>("#script-selection-label");
+  if (!editor || !toolbar || !label || state.ocrBusy) return;
+  const model = scriptEditorModel();
+  if (editor.selectionStart === editor.selectionEnd) {
+    const plainOffset = editor.value.slice(0, editor.selectionStart).replace(/\n/g, "").length;
+    const span = model.spans.find((item) => item.speakerLength > 0 &&
+      plainOffset >= item.start && plainOffset < item.start + item.speakerLength);
+    if (span) {
+      let offset = 0;
+      let start = 0;
+      while (start < editor.value.length && offset < span.start) {
+        if (editor.value[start] !== "\n") offset += 1;
+        start += 1;
+      }
+      while (editor.value[start] === "\n") start += 1;
+      editor.setSelectionRange(start, start + span.speakerLength);
+    }
+  }
+  const selected = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  if (!selected || selected.includes("\n") || !isPlausibleSpeakerLabel(selected)) {
+    hideScriptSelectionToolbar();
+    return;
+  }
+  const plainStart = editor.value.slice(0, editor.selectionStart).replace(/\n/g, "").length;
+  const selectedSpeaker = model.spans.find((span) => span.start === plainStart &&
+    span.speakerLength === selected.length && span.speakerLength > 0);
+  const removeButton = toolbar.querySelector<HTMLButtonElement>('[data-action="unassign-selected-speaker"]');
+  if (removeButton) removeButton.hidden = !selectedSpeaker;
+  label.textContent = `「${selected}」`;
+  toolbar.hidden = false;
+  const bounds = editor.getBoundingClientRect();
+  const toolbarBounds = toolbar.getBoundingClientRect();
+  const x = point?.x ?? bounds.left + 12;
+  const y = point?.y ?? Math.max(12, bounds.top) + 48;
+  toolbar.style.left = `${Math.max(8, Math.min(x, window.innerWidth - toolbarBounds.width - 8))}px`;
+  toolbar.style.top = `${Math.max(8, Math.min(y + 12, window.innerHeight - toolbarBounds.height - 8))}px`;
+}
+
+function unassignSelectedSpeaker(): void {
+  if (state.ocrBusy) return;
+  const editor = root.querySelector<HTMLTextAreaElement>("#full-script-editor");
+  if (!editor) return;
+  const plainStart = editor.value.slice(0, editor.selectionStart).replace(/\n/g, "").length;
+  const model = scriptEditorModel();
+  const span = model.spans.find((item) => item.start === plainStart && item.speakerLength > 0 &&
+    editor.selectionEnd - editor.selectionStart === item.speakerLength);
+  if (!span) return;
+  state.boundaryEdits = setBoundaryEdit(state.boundaryEdits, editorPosition(span, span.start), null);
+  state.ranges = {};
+  state.currentTargetIndex = 0;
+  boundaryDraft = null;
+  const scroll = editor.scrollTop;
+  renderApp();
+  const updated = root.querySelector<HTMLTextAreaElement>("#full-script-editor");
+  if (updated) updated.scrollTop = scroll;
+}
+
+function renderBoundaryEditor(): string {
+  const model = scriptEditorModel();
+  if (boundaryDraft && boundaryDraft.source !== model.text) {
+    boundaryDraft = null;
+    notify("読み取り結果が変わったため、未反映の改行を元に戻しました。", "info");
+  }
+  const text = boundaryDraft?.text ?? model.text;
+  return `
+    <p class="panel-footnote">Enterでセリフを分け、改行を消すとつながります。役名はドラッグして指定し、背景色の付いた役名はクリックして解除できます。</p>
+    <label class="script-editor-label" for="full-script-editor">台本の全文</label>
+    <div class="script-editor-surface">
+      <div id="full-script-highlights" class="full-script-highlights" aria-hidden="true"><div class="script-editor-highlight-content">${renderEditorHighlights(text, model)}</div></div>
+      <textarea class="text-input full-script-editor" id="full-script-editor" spellcheck="false" ${state.ocrBusy ? "disabled" : ""}>${escapeHtml(text)}</textarea>
+    </div>
+    <div id="script-selection-toolbar" class="script-selection-toolbar" role="toolbar" aria-label="選択した文字の役名設定" hidden>
+      <strong id="script-selection-label"></strong>
+      <button class="primary-button" data-action="assign-selected-speaker">役名にする</button>
+      <button class="secondary-button" data-action="unassign-selected-speaker" hidden>役名を解除</button>
+    </div>
+  `;
+}
+
+function editorPosition(span: ScriptEditorSpan, plainOffset: number): Omit<BoundaryEdit, "roleId"> {
+  const localOffset = plainOffset - span.start;
+  const origin = span.block.boundaryOrigin;
+  const offset = Math.max(0, localOffset - span.prefixLength) +
+    (localOffset >= span.prefixLength ? origin?.labelLength ?? 0 : 0);
+  return {
+    blockId: origin?.blockId ?? span.block.id,
+    text: origin?.text ?? span.block.text,
+    offset: (origin?.offset ?? 0) + offset,
+  };
+}
+
+function setBoundaryEdit(edits: BoundaryEdit[], position: Omit<BoundaryEdit, "roleId">, roleId: string | null): BoundaryEdit[] {
+  const remaining = edits.filter((edit) => edit.blockId !== position.blockId || edit.offset !== position.offset);
+  return roleId || position.offset === 0 ? [...remaining, { ...position, roleId }] : remaining;
+}
+
+function showScriptEditorError(message: string): void {
+  const editor = root.querySelector<HTMLTextAreaElement>("#full-script-editor");
+  if (!editor) return;
+  editor.setCustomValidity(message);
+  editor.reportValidity();
+}
+
+function applyScriptEditor(assignSpeaker: boolean): void {
+  if (state.ocrBusy) return;
+  const editor = root.querySelector<HTMLTextAreaElement>("#full-script-editor");
+  if (!editor) return;
+  editor.setCustomValidity("");
+  const model = scriptEditorModel();
+  const plain = editor.value.replace(/\n/g, "");
+  if (plain !== model.text.replace(/\n/g, "")) {
+    showScriptEditorError("ここでは改行を追加・削除できます。本文の文字を元に戻してから適用してください。");
+    return;
+  }
+  const wantedBreaks = new Set<number>();
+  let offset = 0;
+  for (const character of editor.value) {
+    if (character === "\n") wantedBreaks.add(offset);
+    else offset += character.length;
+  }
+  const findSpan = (position: number) => model.spans.find((span) => position >= span.start && position < span.end);
+  let edits = [...state.boundaryEdits];
+  for (const position of new Set([...model.breaks, ...wantedBreaks])) {
+    if (model.breaks.has(position) === wantedBreaks.has(position) || position === 0 || position === plain.length) continue;
+    const span = findSpan(position);
+    if (!span) continue;
+    if (position > span.start && position < span.start + span.prefixLength) {
+      showScriptEditorError("役名の途中には改行を入れられません。");
+      return;
+    }
+    const location = editorPosition(span, position);
+    if (wantedBreaks.has(position)) {
+      const roleId = span.roleId || state.selectedRoleId;
+      if (!roleId) {
+        showScriptEditorError("練習する役を選んでから改行してください。");
+        return;
+      }
+      edits = setBoundaryEdit(edits, location, roleId);
+    } else {
+      edits = setBoundaryEdit(edits, location, null);
+    }
+  }
+
+  if (assignSpeaker) {
+    const start = editor.value.slice(0, editor.selectionStart).replace(/\n/g, "").length;
+    const end = editor.value.slice(0, editor.selectionEnd).replace(/\n/g, "").length;
+    const label = plain.slice(start, end);
+    const span = findSpan(start);
+    if (!span || !label || label !== label.trim() || !isPlausibleSpeakerLabel(label) || end > span.end) {
+      showScriptEditorError("役名の文字だけを選択してください。");
+      return;
+    }
+    const withinPrefix = start === span.start && end === span.start + span.prefixLength;
+    if (start < span.start + span.prefixLength && !withinPrefix) {
+      showScriptEditorError("役名は一部ではなく、名前全体を選択してください。");
+      return;
+    }
+    let role = state.roles.find((candidate) =>
+      candidate.aliases.some((alias) => normalizeAlias(alias) === normalizeAlias(label)));
+    if (!role) {
+      state.manualRoleNumber += 1;
+      role = { id: `manual-${slug(label)}-${state.manualRoleNumber}`, label, aliases: [label], occurrenceCount: 0, exampleBlockIds: [], manual: true, evidence: "manual" };
+      state.roles.push(role);
+    } else if (!role.aliases.includes(label)) {
+      role.aliases = [...role.aliases, label];
+    }
+    const location = editorPosition(span, start);
+    edits = setBoundaryEdit(edits, { ...location, ...(!withinPrefix || span.block.boundaryOrigin?.labelLength ? { speakerText: label } : {}) }, role.id);
+  }
+  state.boundaryEdits = edits;
+  state.ranges = {};
+  state.currentTargetIndex = 0;
+  boundaryDraft = null;
+  const caret = editor.selectionStart;
+  const scrollTop = editor.scrollTop;
+  renderApp();
+  const updated = root.querySelector<HTMLTextAreaElement>("#full-script-editor");
+  if (updated) {
+    updated.focus({ preventScroll: true });
+    updated.setSelectionRange(Math.min(caret, updated.value.length), Math.min(caret, updated.value.length));
+    updated.scrollTop = scrollTop;
+  }
+}
+
+function renderLayoutAdjustment(): string {
+  const previews = state.layoutPreview;
+  const preview = previews?.find((page) => page.pageNumber === state.previewPage) ?? previews?.[0];
+  return `
+    <section class="panel layout-adjustment-panel" aria-labelledby="layout-adjustment-heading">
+      <div class="panel-heading"><div><h2 id="layout-adjustment-heading">区切りの調整</h2><p>セリフを分ける位置や、話す役を調整します。</p></div></div>
+      <div class="image-analysis-section">
+        <h3 class="adjustment-mode-title"><span>おすすめ</span>画像解析して調整する</h3>
+        <p class="panel-footnote">全ページを画像解析し、読み順やセリフの区切りを判定し直します。</p>
+        <div class="image-analysis-actions">
+          <button class="secondary-button" data-action="preview-ocr-layout" ${state.ocrBusy || preview || state.ocrAnalysisComplete ? "disabled" : ""}>${state.ocrAnalysisComplete ? "画像解析は完了しました" : "画像解析する"}</button>
+          ${state.ocrAnalysisComplete && !preview ? `<button class="text-button" data-action="preview-ocr-layout" ${state.ocrBusy ? "disabled" : ""}>解析結果を確認する</button>` : ""}
+        </div>
+        <p class="panel-footnote">画像解析はこの端末内で行い、PDFや読み取り結果をサーバーに送信しません。</p>
+        ${renderImageAnalysisProgress("layout")}
+        ${preview && previews ? `
+          <div class="layout-ocr-preview">
+            <h3>画像解析の結果（${previews.length}ページ）</h3>
+            <label class="select-field"><span>表示するページ</span><select class="select-input" id="layout-ocr-page-select">${previews.map((page) =>
+              `<option value="${page.pageNumber}" ${page === preview ? "selected" : ""}>${page.pageNumber}ページ目</option>`,
+            ).join("")}</select></label>
+            <p>元のPDFと見比べ、読み順や役名を確認してから適用してください。</p>
+            <div class="layout-preview-lines">${renderPageBlocks(preview.pageNumber, preview)}</div>
+            ${state.boundaryEdits.length ? "<p>結果を適用したページでは、手動で変更した区切りが解除されます。</p>" : ""}
+            ${Object.keys(state.ranges).length ? "<p>適用すると、調整した練習範囲が初期設定に戻ります。</p>" : ""}
+            <div class="image-analysis-actions">
+              <button class="primary-button" data-action="apply-ocr-layout" ${state.ocrBusy ? "disabled" : ""}>結果を適用する（${previews.length}ページ）</button>
+              <button class="text-button" data-action="discard-ocr-layout">適用せずに閉じる</button>
+            </div>
+          </div>` : ""}
+        ${state.ocrErrors.layout ? `<div class="alert alert-warning image-analysis-error" role="alert">${escapeHtml(state.ocrErrors.layout)}</div>` : ""}
+      </div>
+      <details id="manual-boundary-editor" class="manual-adjustment">
+        <summary>手動で調整する</summary>
+        ${renderBoundaryEditor()}
+      </details>
+    </section>`;
+}
+
+function renderTextOcrPreview(): string {
+  const preview = state.textOcrPreview;
+  if (!preview) return "";
+  const sourcePage = state.pages.find((page) => page.pageNumber === state.previewPage);
+  const recognized = preview.pages.find((page) => page.pageNumber === sourcePage?.pageNumber) ?? preview.pages[0];
+  const source = state.pages.find((page) => page.pageNumber === recognized?.pageNumber);
+  if (!recognized || !source) return "";
+  const corrections = { ...preview.corrections, ...state.corrections };
+  const merged = mergeRecognizedPage(source, recognized, undefined, corrections);
+  const displayed = { ...merged, blocks: applyCharacterCorrections(merged.blocks, corrections) };
+  return `
+    <div class="layout-ocr-preview">
+      <h3>画像解析の結果（${preview.pages.length}ページ）</h3>
+      <label class="select-field"><span>表示するページ</span><select class="select-input" id="text-ocr-page-select">${preview.pages.map((page) =>
+        `<option value="${page.pageNumber}" ${page.pageNumber === recognized.pageNumber ? "selected" : ""}>${page.pageNumber}ページ目</option>`,
+      ).join("")}</select></label>
+      <p>上の読み取り結果と見比べてから適用してください。</p>
+      <div class="layout-preview-lines">${renderPageBlocks(displayed.pageNumber, displayed)}</div>
+      ${Object.keys(state.ranges).length ? "<p>適用すると、調整した練習範囲が初期設定に戻ります。</p>" : ""}
+      <div class="image-analysis-actions">
+        <button class="primary-button" data-action="apply-ocr-text" ${state.ocrBusy ? "disabled" : ""}>結果を適用する（${preview.pages.length}ページ）</button>
+        <button class="text-button" data-action="discard-ocr-text">適用せずに閉じる</button>
+      </div>
+    </div>`;
+}
+
+function applyTextOcrPreview(): void {
+  const preview = state.textOcrPreview;
+  if (!preview || state.ocrBusy) return;
+  const recognized = new Map(preview.pages.map((page) => [page.pageNumber, page]));
+  const corrections = { ...preview.corrections, ...state.corrections };
+  let replacedPages = 0;
+  state.pages = state.pages.map((page) => {
+    const result = recognized.get(page.pageNumber);
+    if (!result) return page;
+    const merged = mergeRecognizedPage(page, result, undefined, corrections);
+    if (merged !== page) replacedPages += 1;
+    return merged;
+  });
+  state.corrections = corrections;
+  state.textOcrCompletion = { pageCount: preview.pages.length, replacedPages };
+  state.textOcrPreview = null;
+  state.ranges = {};
+  state.currentTargetIndex = 0;
+  refreshAutomaticRoles();
+  renderApp();
+}
+
+function renderCorrectionPanel(glyphs: ReturnType<typeof findUnusualCharacters>): string {
+  const unresolved = glyphs.filter((entry) => !state.corrections[entry.character]?.trim()).length;
+  const savedCorrectionCount = Object.values(state.savedPractice?.settings.corrections ?? {}).filter((value) => value.trim()).length;
   const glyphRows = glyphs.map((entry) => {
     const block = rawBlocks().find((item) => item.id === entry.exampleBlockId);
-    return `<article class="glyph-row"><div class="glyph-sample"><span class="glyph-character">${escapeHtml(entry.character)}</span><span class="glyph-count">${entry.count.toLocaleString("ja-JP")} 回</span></div><div class="glyph-context"><span class="small-label">p.${entry.examplePage} の例</span><p>${escapeHtml(entry.example)}</p><button class="text-button" data-action="preview-block" data-block-id="${escapeHtml(entry.exampleBlockId)}">${block ? escapeHtml(blockPosition(block)) : `p.${entry.examplePage}`} のPDFを見る</button></div><label class="glyph-replacement">正しい文字<input class="text-input" type="text" maxlength="8" data-correction-char="${escapeHtml(entry.character)}" value="${escapeHtml(state.corrections[entry.character] ?? "")}" placeholder="PDFを見て入力" /></label></article>`;
+    return `<article class="glyph-row"><div class="glyph-sample"><span class="glyph-character">${escapeHtml(entry.character)}</span><span class="glyph-count">${entry.count.toLocaleString("ja-JP")}回</span></div><div class="glyph-context"><span class="small-label">${entry.examplePage}ページ目の例</span><p>${escapeHtml(entry.example)}</p><button class="text-button" data-action="preview-block" data-block-id="${escapeHtml(entry.exampleBlockId)}">${block ? escapeHtml(blockPosition(block)) : `${entry.examplePage}ページ目`}を元のPDFで見る</button></div><label class="glyph-replacement">正しい文字<input class="text-input" type="text" maxlength="8" data-correction-char="${escapeHtml(entry.character)}" value="${escapeHtml(state.corrections[entry.character] ?? "")}" placeholder="PDFを見て入力" /></label></article>`;
   }).join("");
   return `
-    <div class="reading-support">
-      ${needsReview ? `<section class="alert alert-warning correction-warning" role="alert" aria-labelledby="correction-warning-heading">
-        <h2 id="correction-warning-heading" class="correction-warning-title">読み取り結果を確認してください</h2>
-        <p class="correction-warning-description">${glyphs.length > 0 ? `${occurrenceCount.toLocaleString("ja-JP")} か所に、PDFの表示と違う文字が含まれるかもしれません。` : "画像解析で読み直した文字を含みます。役名や練習する行を確認してください。"}</p>
-        <p class="correction-warning-description">文字を置き換えるか、画像解析で読み直せます。</p>
-      </section>` : ""}
       <section class="panel glyph-panel" aria-labelledby="glyph-panel-heading">
-        <div class="panel-heading"><div><h2 id="glyph-panel-heading">文字の置き換え</h2></div>${glyphs.length > 0 ? `<span class="count-pill">${glyphs.length} 種類 · 未設定 ${unresolved}</span>` : ""}</div>
-        ${savedCorrectionCount > 0 ? `<div class="saved-corrections-option"><p>このPDFで保存した置き換え（${savedCorrectionCount} 種類）</p><button class="text-button" data-action="restore-saved-corrections">前回の置き換えを使う</button></div>` : ""}
-        ${hasOcrSupport ? `<section class="image-analysis-section" aria-labelledby="image-analysis-heading"><h3 id="image-analysis-heading">画像解析で文字を読み直す</h3>${ocrCandidateCount > 0 ? `<p>PDFの見た目を確かめて、最初に読めなかった文字を補います。ページ数によっては数分かかります。</p>` : `<p>画像解析で読み直した文字を使っています。</p>`}${imageAnalysisProgress}${state.cachedOcrPages.length > 0 ? `<p class="image-analysis-history-copy">前回の結果（${state.cachedOcrPages.length} ページ）を使えます。</p>` : ""}<div class="image-analysis-actions">${state.cachedOcrPages.length > 0 ? `<button class="primary-button" data-action="use-previous-image-analysis" ${state.ocrBusy ? "disabled" : ""}>前回の結果を使う</button>` : ""}${ocrCandidateCount > 0 && !state.ocrBusy ? `<button class="secondary-button" data-action="read-with-ocr">画像解析して読み直す（${ocrCandidateCount} ページ）</button>` : ""}${ocrPageCount > 0 ? `<button class="text-button" data-action="restore-pdf-text">PDFから取り出した文字に戻す</button>` : ""}</div>${ocrCandidateCount > 0 ? `<p class="image-analysis-local-note">画像解析はこのブラウザ内で行います。</p>` : ""}</section>` : ""}
-        ${glyphs.length > 0 ? `<details class="glyph-replacements-details"><summary>文字ごとに確認して置き換える（${glyphs.length} 種類）</summary><div class="glyph-list">${glyphRows}</div><p class="glyph-footnote">PDFに書かれた文字を見て、正しい字が分かるものだけ入力してください。置き換えはこの画面にだけ反映します。</p></details>` : `<p class="glyph-empty-state">置き換えが必要な文字はありません。</p>`}
+        <div class="panel-heading"><div><h2 id="glyph-panel-heading">文字の置換</h2><p>文字化けや、誤って読み取られた文字を置き換えます。</p></div>${glyphs.length > 0 ? `<span class="count-pill">${glyphs.length}種類 · 未設定 ${unresolved}種類</span>` : ""}</div>
+        <div class="image-analysis-section">
+          <h3 class="adjustment-mode-title"><span>おすすめ</span>画像解析して置換する</h3>
+          <p class="panel-footnote">全ページを画像解析し、文字化けや読み取れなかった箇所を補います。</p>
+          <div class="image-analysis-actions">
+            <button class="secondary-button" data-action="read-with-ocr" ${state.ocrBusy || state.textOcrPreview || state.textOcrCompletion || state.ocrAnalysisComplete ? "disabled" : ""}>${state.ocrAnalysisComplete ? "画像解析は完了しました" : "画像解析する"}</button>
+            ${state.ocrAnalysisComplete && !state.textOcrPreview && !state.textOcrCompletion ? `<button class="text-button" data-action="read-with-ocr" ${state.ocrBusy ? "disabled" : ""}>解析結果を確認する</button>` : ""}
+            ${state.cachedOcrPages.length > 0 ? `<button class="text-button" data-action="use-previous-image-analysis" ${state.ocrBusy || state.layoutPreview ? "disabled" : ""}>前回の画像解析結果を適用する（${state.cachedOcrPages.length}ページ）</button>` : ""}
+          </div>
+          <p class="panel-footnote">画像解析はこの端末内で行い、PDFや読み取り結果をサーバーに送信しません。</p>
+          ${renderImageAnalysisProgress("text")}
+          ${renderTextOcrPreview()}
+          ${state.textOcrCompletion ? `
+            <div class="image-analysis-completion" role="status">
+              <strong>画像解析の結果を適用しました</strong>
+              <p>${state.textOcrCompletion.pageCount}ページの解析結果を適用しました。${state.textOcrCompletion.replacedPages > 0 ? `${state.textOcrCompletion.replacedPages}ページの文字を置換しました。` : "置換した文字はありません。"}</p>
+            </div>` : ""}
+          ${state.ocrErrors.text ? `<div class="alert alert-warning image-analysis-error" role="alert">${escapeHtml(state.ocrErrors.text)}</div>` : ""}
+        </div>
+        <details id="manual-glyph-editor" class="manual-adjustment">
+          <summary>手動で調整する</summary>
+        ${savedCorrectionCount > 0 ? `<div class="saved-corrections-option"><p>前回の文字の置換（${savedCorrectionCount}種類）</p><button class="text-button" data-action="restore-saved-corrections">前回の文字の置換を適用する</button></div>` : ""}
+        ${glyphs.length > 0 ? `<div class="glyph-list">${glyphRows}</div><p class="glyph-footnote">元のPDFと見比べ、正しい文字を入力してください。入力内容は読み取り結果と練習画面に反映されます。</p>` : `<p class="glyph-empty-state">手動で置換する候補はありません。</p>`}
+        </details>
       </section>
-      ${state.ocrError ? `<div class="alert alert-warning image-analysis-error" role="alert">${escapeHtml(state.ocrError)}</div>` : ""}
-    </div>`;
+  `;
 }
 
 function renderRoleCard(role: RoleCandidate, allTurns: SpeakerTurn[], blocksById: Map<string, SourceBlock>): string {
@@ -971,34 +1403,33 @@ function renderRoleCard(role: RoleCandidate, allTurns: SpeakerTurn[], blocksById
   const evidenceLabel = role.manual
     ? "手動で追加"
     : role.evidence === "layout"
-      ? "配置から候補"
+      ? "文字の配置から検出"
       : role.evidence === "recovered"
-        ? "文字の対応を要確認"
-        : "名前と記号から候補";
+        ? "役名の表記を要確認"
+        : "役名と記号から検出";
   return `
     <article class="role-card ${selected ? "role-card-selected" : ""}">
-      <div class="role-card-top"><span class="role-badge">${evidenceLabel}${role.manual ? "" : ` · ${role.occurrenceCount} 回`}</span><button class="secondary-button small-button remove-role-button" data-action="remove-role" data-role-id="${escapeHtml(role.id)}">候補から外す</button></div>
+      <div class="role-card-top"><span class="role-badge">${evidenceLabel}${role.manual ? "" : ` · ${role.occurrenceCount}回`}</span><button class="secondary-button small-button remove-role-button" data-action="remove-role" data-role-id="${escapeHtml(role.id)}">候補から外す</button></div>
       <label class="field-label">画面に表示する役名<input class="text-input" type="text" data-role-label="${escapeHtml(role.id)}" value="${escapeHtml(role.label)}" maxlength="24" /></label>
-      <label class="field-label">台本に書かれた名前（表記は「、」で区切る）<input class="text-input" type="text" data-role-aliases="${escapeHtml(role.id)}" value="${escapeHtml(role.aliases.join("、"))}" maxlength="120" /></label>
-      <div class="role-card-meta"><span>セリフ候補 <strong>${count}</strong></span>${example[0] ? `<button class="text-button" data-action="preview-block" data-block-id="${escapeHtml(example[0].id)}">例を見る · ${escapeHtml(blockPosition(example[0]))}</button>` : ""}</div>
+      <label class="field-label">台本での役名（複数の表記は「、」で区切る）<input class="text-input" type="text" data-role-aliases="${escapeHtml(role.id)}" value="${escapeHtml(role.aliases.join("、"))}" maxlength="120" /></label>
+      <div class="role-card-meta"><span>セリフ <strong>${count}件</strong></span>${example[0] ? `<button class="text-button" data-action="preview-block" data-block-id="${escapeHtml(example[0].id)}">元のPDFで例を見る · ${escapeHtml(blockPosition(example[0]))}</button>` : ""}</div>
       ${example.length > 1 ? `<p class="role-example">例：${escapeHtml(example[1].text.slice(0, 52))}${example[1].text.length > 52 ? "…" : ""}</p>` : ""}
       <button class="role-select-button ${selected ? "primary-button" : "secondary-button"}" data-action="select-role" data-role-id="${escapeHtml(role.id)}" aria-pressed="${selected}">${selected ? "選択中" : "この役を選ぶ"}</button>
     </article>`;
 }
 
-function renderPageBlocks(pageNumber: number): string {
-  const page = state.pages.find((candidate) => candidate.pageNumber === pageNumber);
-  if (!page || page.blocks.length === 0) return `<p class="muted-copy">このページから読める文字はありません。</p>`;
-  const sourceNote = page.textSource === "ocr"
-    || page.blocks.some((block) => block.recognitionConfidence !== undefined)
-    ? `<p class="image-analysis-page-note">画像解析で読み直した行を含みます。元のPDFと照らし合わせてください。</p>`
+function renderPageBlocks(pageNumber: number, preview?: SourcePage): string {
+  const page = preview ?? state.pages.find((candidate) => candidate.pageNumber === pageNumber);
+  if (!page || page.blocks.length === 0) return `<p class="muted-copy">このページから文字を読み取れませんでした。</p>`;
+  const sourceNote = !preview && isOcrRecognizedPage(page)
+    ? `<p class="image-analysis-page-note">画像解析の結果を含みます。元のPDFと見比べてください。</p>`
     : "";
-  const allBlocks = blocks();
+  const allBlocks = preview?.blocks ?? blocks();
   const pageBlocks = allBlocks.filter((block) => block.pageNumber === pageNumber);
   const blockIndexById = new Map(allBlocks.map((block, index) => [block.id, index]));
   const turnByBlockId = new Map<string, SpeakerTurn>();
   const turnStartsByBlockId = new Set<string>();
-  for (const turn of turns()) {
+  for (const turn of preview ? [] : turns()) {
     const startBlock = allBlocks[turn.startIndex];
     if (startBlock) turnStartsByBlockId.add(startBlock.id);
     for (let index = turn.startIndex; index <= turn.endIndex; index += 1) {
@@ -1010,8 +1441,8 @@ function renderPageBlocks(pageNumber: number): string {
   const groups: Array<{ blocks: SourceBlock[]; speech: boolean; standalone: boolean; turn?: SpeakerTurn }> = [];
   for (const block of pageBlocks) {
     const standalone = isCastListEntry(block);
-    const startsSpeech = !standalone && Boolean(
-      block.speakerLabel || cueAtStart(block.text, recoveredOpeningMarkers) || turnStartsByBlockId.has(block.id),
+    const startsSpeech = !standalone && block.boundaryRoleId !== null && Boolean(
+      block.speakerLabel || cueAtStart(block.text, recoveredOpeningMarkers, usableRoleCandidates()) || turnStartsByBlockId.has(block.id),
     );
     const turn = standalone ? undefined : turnByBlockId.get(block.id);
     const previousGroup = groups[groups.length - 1];
@@ -1044,14 +1475,14 @@ function renderPageBlocks(pageNumber: number): string {
     const firstBlock = visibleBlocks[0] ?? group.blocks[0];
     const lastBlock = visibleBlocks[visibleBlocks.length - 1] ?? firstBlock;
     if (!firstBlock) return "";
-    const hasText = visibleBlocks.some((block) => block.text.trim());
+    const hasText = visibleBlocks.some((block) => block.text.trim() || block.speakerLabel?.trim());
     const hasSuffix = group.blocks.some((block) => block.isSpeakerSuffix);
     if (!hasText && !hasSuffix) return "";
     const position = blockRangePosition(firstBlock, lastBlock);
     const firstIndex = blockIndexById.get(firstBlock.id);
     const turnStartsHere = firstIndex !== undefined && firstIndex === group.turn?.startIndex;
-    const cue = cueAtStart(firstBlock.text, recoveredOpeningMarkers);
-    const sourceSpeakerLabel = firstBlock.coSpeakers && firstBlock.coSpeakers.length > 1
+    const cue = cueAtStart(firstBlock.text, recoveredOpeningMarkers, usableRoleCandidates());
+    const sourceSpeakerLabel = firstBlock.boundaryRoleId === null ? undefined : firstBlock.coSpeakers && firstBlock.coSpeakers.length > 1
       ? firstBlock.coSpeakers.join("・")
       : firstBlock.speakerLabel;
     const roleLabel = group.turn
@@ -1064,13 +1495,13 @@ function renderPageBlocks(pageNumber: number): string {
         : group.speech && !cue && roleLabel
           ? `<span class="extracted-continuation">役名候補 · ${escapeHtml(roleLabel)}</span>`
           : "";
-    const text = visibleBlocks.map((block) => block.text).join("");
+    const content = renderScriptBlocks(visibleBlocks);
     const suffixNotes = group.blocks
       .filter((block) => block.isSpeakerSuffix)
       .map((block) => `<small class="extracted-suffix-note">「${escapeHtml(block.rawText.trim())}」を隣の役名「${escapeHtml(block.speakerAliases?.[0] ?? "")}」の一部として扱っています。</small>`)
       .join("");
 
-    return `<article class="extracted-line"><span>${escapeHtml(position)}</span><div><p>${displayLabel}${renderScriptContent(text || "（文字なし）")}</p>${suffixNotes}</div></article>`;
+    return `<article class="extracted-line"><span>${escapeHtml(position)}</span><div><p>${displayLabel}${content || "（文字なし）"}</p>${suffixNotes}</div></article>`;
   }).join("");
 }
 
@@ -1088,8 +1519,8 @@ function canJoinUnassignedPreviewBlocks(
 function blockRangePosition(first: SourceBlock, last: SourceBlock): string {
   if (first.orderOnPage === last.orderOnPage) return blockPosition(first);
   return first.direction === "vertical"
-    ? `p.${first.pageNumber} · 右から${first.orderOnPage}〜${last.orderOnPage}列目`
-    : `p.${first.pageNumber} · 上から${first.orderOnPage}〜${last.orderOnPage}行目`;
+    ? `${first.pageNumber}ページ目 · 右から${first.orderOnPage}〜${last.orderOnPage}列目`
+    : `${first.pageNumber}ページ目 · 上から${first.orderOnPage}〜${last.orderOnPage}行目`;
 }
 
 function renderAppearances(): string {
@@ -1106,21 +1537,21 @@ function renderAppearances(): string {
 
   return `
     <main class="work-page appearances-page">
-      ${renderStepHeader("シーンを選ぶ", `練習する役：${role?.label ?? "未選択"}`)}
-      <div class="scene-explainer"><p>番号付きの区切りで分けた練習シーンです。前後の範囲は練習画面で調整できます。</p></div>
-      ${targets.length === 0 ? `<div class="empty-state"><strong>この役のシーンを見つけられませんでした</strong><p>読み取り結果に戻り、役名とセリフの対応を見直してください。</p><button class="secondary-button" data-action="back-to-analysis">読み取り結果へ戻る</button></div>` : `<div class="appearance-groups">${[...groups.entries()].map(([sceneLabel, sceneTargets]) => `
+      ${renderStepHeader("練習シーンを選ぶ", `練習する役：${role?.label ?? "未選択"}`)}
+      <div class="scene-explainer"><p>台本の区切りごとに練習シーンを表示します。前後に表示する範囲は練習画面で調整できます。</p></div>
+      ${targets.length === 0 ? `<div class="empty-state"><strong>この役の練習シーンがありません</strong><p>読み取り結果に戻り、役名とセリフの対応を見直してください。</p><button class="secondary-button" data-action="back-to-analysis">読み取り結果に戻る</button></div>` : `<div class="appearance-groups">${[...groups.entries()].map(([sceneLabel, sceneTargets]) => `
         <section class="scene-group">
-          <div class="scene-heading"><span>台本の区切り</span><h2>${escapeHtml(sceneLabel)}</h2><span class="scene-unit-count">練習シーン ${sceneTargets.length} 件</span></div>
+          <div class="scene-heading"><span>台本の区切り</span><h2>${escapeHtml(sceneLabel)}</h2><span class="scene-unit-count">練習シーン ${sceneTargets.length}件</span></div>
           <div class="appearance-list">${sceneTargets.map((target) => {
             const index = targets.findIndex((item) => item.id === target.id);
             const openingLine = appearanceOpeningLine(target, allBlocks, allTurns);
             return `<article class="appearance-row">
-              <div class="appearance-copy"><span class="small-label">練習シーン ${index + 1} · ${escapeHtml(formatPageRange(target.turn.startPage, target.turn.endPage))}</span><p class="appearance-opening-line">${escapeHtml(openingLine || "前のセリフが見つかりません")}</p></div>
-              <button class="secondary-button appearance-start" data-action="start-practice" data-target-index="${index}" ${state.practiceSaveBusy ? "disabled" : ""}>このシーンから始める</button>
+              <div class="appearance-copy"><span class="small-label">練習シーン ${index + 1} · ${escapeHtml(formatPageRange(target.turn.startPage, target.turn.endPage))}</span><p class="appearance-opening-line">${escapeHtml(openingLine || "前のセリフがありません")}</p></div>
+              <button class="secondary-button appearance-start" data-action="start-practice" data-target-index="${index}" ${state.practiceSaveBusy ? "disabled" : ""}>この練習シーンから始める</button>
             </article>`;
           }).join("")}</div>
         </section>`).join("")}</div>`}
-      <div class="bottom-actions sticky-action-bar"><button class="text-button" data-action="back-to-analysis">読み取り結果を再確認する</button><button class="primary-button" data-action="start-practice" data-target-index="${state.practiceHasStarted ? Math.min(state.currentTargetIndex, Math.max(0, targets.length - 1)) : 0}" ${targets.length === 0 || state.practiceSaveBusy ? "disabled" : ""}>続きから始める</button></div>
+      <div class="bottom-actions sticky-action-bar"><button class="text-button" data-action="back-to-analysis">読み取り結果に戻る</button><button class="primary-button" data-action="start-practice" data-target-index="${state.practiceHasStarted ? Math.min(state.currentTargetIndex, Math.max(0, targets.length - 1)) : 0}" ${targets.length === 0 || state.practiceSaveBusy ? "disabled" : ""}>${state.practiceHasStarted ? "前回の練習シーンから始める" : "最初の練習シーンから始める"}</button></div>
     </main>`;
 }
 
@@ -1147,7 +1578,7 @@ function appearanceOpeningLine(
     .map((fragment) => fragment.text)
     .join("")
     .trim();
-  const cue = cueAtStart(speechText, recoveredOpeningMarkers);
+  const cue = cueAtStart(speechText, recoveredOpeningMarkers, usableRoleCandidates());
   let preview = speechText;
   if (cue) {
     const markerIndex = speechText.indexOf(cue.marker, cue.name.length);
@@ -1174,7 +1605,7 @@ function renderPractice(): string {
   const targets = practiceTargets();
   const target = targets[state.currentTargetIndex];
   const role = selectedRole();
-  if (!target || !role) return `<main class="narrow-page"><p>練習するシーンを選んでください。</p><button class="secondary-button" data-action="back-to-appearances">シーン一覧へ戻る</button></main>`;
+  if (!target || !role) return `<main class="narrow-page"><p>練習シーンを選んでください。</p><button class="secondary-button" data-action="back-to-appearances">練習シーン一覧に戻る</button></main>`;
 
   const allBlocks = blocks();
   const speakerTurns = turnsForBlocks(allBlocks);
@@ -1192,37 +1623,37 @@ function renderPractice(): string {
       <section class="${practiceStyles.heading}">
         <div><p class="${practiceStyles.meta}">台本の${escapeHtml(target.sceneLabel)} · ${escapeHtml(pageRange)}</p><h1>${escapeHtml(role.label)}の練習シーン <span>${String(state.currentTargetIndex + 1).padStart(2, "0")}</span></h1></div>
       </section>
-      ${glyphCorrectionsExist ? `<p class="${practiceStyles.correctionReminder}">読み取りの文字置き換えを表示に反映しています。元のPDFは変更していません。</p>` : ""}
+      ${glyphCorrectionsExist ? `<p class="${practiceStyles.correctionReminder}">文字の置換を練習画面に反映しています。</p>` : ""}
       <div class="${practiceStyles.layout}">
         <section class="${practiceStyles.card}">
-          <div class="${practiceStyles.cardHeading}"><span class="small-label">${state.revealed ? "答え" : "ここまでのセリフとト書き"}</span><span class="${practiceStyles.pageTag}">${escapeHtml(pageRange)}</span></div>
-          ${contextHtml ? `<div class="${practiceStyles.scriptStream} ${practiceStyles.contextStream}" id="context-stream">${contextHtml}</div>` : `<div class="${practiceStyles.noContext}"><p>このシーンより前のセリフやト書きが見つかりませんでした。</p></div>`}
+          <div class="${practiceStyles.cardHeading}"><span class="small-label">${state.revealed ? "答え" : "前のセリフとト書き"}</span><span class="${practiceStyles.pageTag}">${escapeHtml(pageRange)}</span></div>
+          ${contextHtml ? `<div class="${practiceStyles.scriptStream} ${practiceStyles.contextStream}" id="context-stream">${contextHtml}</div>` : `<div class="${practiceStyles.noContext}"><p>この練習シーンの前に表示するセリフやト書きはありません。</p></div>`}
           ${state.revealed ? `<div class="${practiceStyles.revealedAnswer}" id="revealed-answer">${afterHtml}</div>` : `
             <div class="${practiceStyles.answerPrompt}" aria-live="polite">
-              <button class="primary-button ${practiceStyles.revealButton}" data-action="reveal">確認する</button>
+              <button class="primary-button ${practiceStyles.revealButton}" data-action="reveal">答えを確認する</button>
             </div>`}
           <details class="${practiceStyles.rangeDetails}">
-            <summary>表示するセリフの範囲を調整</summary>
+            <summary>表示する範囲を調整する</summary>
             <div class="${practiceStyles.rangeControls}">
               <label class="${practiceStyles.rangeControl}"><span>前のセリフやト書きをどこから表示するか</span><input class="${practiceStyles.rangeSlider}" type="range" min="${target.minimumStartIndex}" max="${target.turn.startIndex}" value="${range.start}" data-range-start="${escapeHtml(target.id)}" /><small id="range-start-label">${escapeHtml(positionAt(allBlocks, range.start))}</small></label>
-              <label class="${practiceStyles.rangeControl}"><span>確認後、どこまで続けて表示するか</span><input class="${practiceStyles.rangeSlider}" type="range" min="${target.defaultEndIndex}" max="${Math.max(target.defaultEndIndex, allBlocks.length - 1)}" value="${range.end}" data-range-end="${escapeHtml(target.id)}" /><small id="range-end-label">${escapeHtml(positionAt(allBlocks, range.end))}</small></label>
-              <button class="text-button ${practiceStyles.resetRange}" data-action="reset-range" data-target-id="${escapeHtml(target.id)}">最初の範囲に戻す</button>
+              <label class="${practiceStyles.rangeControl}"><span>答えを確認したあと、どこまで表示するか</span><input class="${practiceStyles.rangeSlider}" type="range" min="${target.defaultEndIndex}" max="${Math.max(target.defaultEndIndex, allBlocks.length - 1)}" value="${range.end}" data-range-end="${escapeHtml(target.id)}" /><small id="range-end-label">${escapeHtml(positionAt(allBlocks, range.end))}</small></label>
+              <button class="text-button ${practiceStyles.resetRange}" data-action="reset-range" data-target-id="${escapeHtml(target.id)}">練習範囲を初期設定に戻す</button>
             </div>
           </details>
         </section>
         <aside class="${practiceStyles.sidePanel}">
-          <div class="${practiceStyles.sideCard} ${practiceStyles.progressCard}"><span class="small-label">練習の進み具合</span><div class="${practiceStyles.miniProgress}"><span style="width:${Math.round(((state.currentTargetIndex + 1) / Math.max(1, targets.length)) * 100)}%"></span></div><p>${state.currentTargetIndex + 1} / ${targets.length} シーン</p></div>
-          ${state.revealed ? `<div class="${practiceStyles.sideCard} ${practiceStyles.sourceCard}"><span class="small-label">元のPDF</span><p>このシーンのページを開いて確認できます。</p><button class="secondary-button" data-action="toggle-source">${state.showOriginal ? "PDFを閉じる" : "PDFを見る"}</button></div>` : `<div class="${practiceStyles.sideCard} ${practiceStyles.sourceCard}"><span class="small-label">元のPDF</span><p>答えを確認すると、該当ページを開けます。</p><button class="secondary-button" disabled>確認後に表示</button></div>`}
+          <div class="${practiceStyles.sideCard} ${practiceStyles.progressCard}"><span class="small-label">練習の進捗</span><div class="${practiceStyles.miniProgress}"><span style="width:${Math.round(((state.currentTargetIndex + 1) / Math.max(1, targets.length)) * 100)}%"></span></div><p>${state.currentTargetIndex + 1} / ${targets.length}シーン</p></div>
+          ${state.revealed ? `<div class="${practiceStyles.sideCard} ${practiceStyles.sourceCard}"><span class="small-label">元のPDF</span><p>この練習シーンのページを確認できます。</p><button class="secondary-button" data-action="toggle-source">${state.showOriginal ? "元のPDFを閉じる" : "元のPDFを見る"}</button></div>` : `<div class="${practiceStyles.sideCard} ${practiceStyles.sourceCard}"><span class="small-label">元のPDF</span><p>答えを確認すると、該当ページを開けます。</p><button class="secondary-button" disabled>答えの確認後に表示</button></div>`}
         </aside>
       </div>
-      ${state.showOriginal ? `<section class="panel ${practiceStyles.sourcePreview}"><div class="source-toolbar"><div><span class="small-label">元のPDF · ${state.originalPage} ページ</span><h2>原稿を確認する</h2></div><label>ページ<select class="select-input" id="original-page-select">${state.pages.map((page) => `<option value="${page.pageNumber}" ${page.pageNumber === state.originalPage ? "selected" : ""}>${page.pageNumber} ページ</option>`).join("")}</select></label></div><div class="pdf-canvas-scroll"><canvas id="page-canvas" aria-label="元のPDFのページ"></canvas></div></section>` : ""}
-      ${!target.nextTurn && state.revealed ? `<p class="alert alert-warning ${practiceStyles.lastUtteranceNote}">${escapeHtml(role.label)}の次のセリフを見つけられませんでした。読み取り結果で役名を確認してください。</p>` : ""}
-      <p class="${practiceStyles.keyboardHelp}">キー操作：← 前のシーン　→ 確認／次のシーン　R もう一度</p>
+      ${state.showOriginal ? `<section class="panel ${practiceStyles.sourcePreview}"><div class="source-toolbar"><div><span class="small-label">${state.originalPage}ページ目</span><h2>元のPDFを確認する</h2></div><label class="select-field"><span>表示するページ</span><select class="select-input" id="original-page-select">${state.pages.map((page) => `<option value="${page.pageNumber}" ${page.pageNumber === state.originalPage ? "selected" : ""}>${page.pageNumber}ページ目</option>`).join("")}</select></label></div><div class="pdf-canvas-scroll"><canvas id="page-canvas" aria-label="元のPDFのページ"></canvas></div></section>` : ""}
+      ${!target.nextTurn && state.revealed ? `<p class="alert alert-warning ${practiceStyles.lastUtteranceNote}">${escapeHtml(role.label)}の次のセリフを見つけられませんでした。読み取り結果で役名やセリフの区切りを確認してください。</p>` : ""}
+      <p class="${practiceStyles.keyboardHelp}">キー操作：← 前の練習シーン　→ 確認／次の練習シーン　R もう一度</p>
       <nav class="${practiceStyles.navigation}" aria-label="練習の操作">
-        <button class="secondary-button" data-action="back-to-appearances">シーンを選ぶ</button>
-        <button class="secondary-button" data-action="previous-target" ${state.currentTargetIndex === 0 ? "disabled" : ""}>前のシーン</button>
-        <button class="secondary-button" data-action="repeat-target">同じシーンをもう一度</button>
-        <button class="primary-button" data-action="next-target" ${!state.revealed ? "disabled" : ""}>${state.currentTargetIndex + 1 >= targets.length ? "シーン一覧へ" : "次のシーン"}</button>
+        <button class="secondary-button" data-action="back-to-appearances">練習シーン一覧に戻る</button>
+        <button class="secondary-button" data-action="previous-target" ${state.currentTargetIndex === 0 ? "disabled" : ""}>前の練習シーン</button>
+        <button class="secondary-button" data-action="repeat-target">同じ練習シーンをもう一度</button>
+        <button class="primary-button" data-action="next-target" ${!state.revealed ? "disabled" : ""}>${state.currentTargetIndex + 1 >= targets.length ? "練習シーン一覧に戻る" : "次の練習シーン"}</button>
       </nav>
     </main>`;
 }
@@ -1236,7 +1667,7 @@ function renderAnswer(
   const own = renderBlockRange(allBlocks, target.turn.startIndex, target.turn.endIndex, speakerTurns);
   const next = target.nextTurn
     ? `<section class="${practiceStyles.answerSection} ${practiceStyles.nextSpeechSection}"><div class="${practiceStyles.answerSectionHeading}"><div><span class="small-label">次のセリフ</span><h2>${escapeHtml(roleLabel(target.nextTurn.roleId))}</h2></div></div><div class="${practiceStyles.scriptStream}">${renderBlockRange(allBlocks, target.nextTurn.startIndex, target.nextTurn.endIndex, speakerTurns)}</div></section>`
-    : `<div class="${practiceStyles.nextSpeechMissing}"><span class="small-label">次のセリフ</span><p>続くセリフを見つけられませんでした。</p></div>`;
+    : `<div class="${practiceStyles.nextSpeechMissing}"><span class="small-label">次のセリフ</span><p>次のセリフが見つかりませんでした。</p></div>`;
   const extraStart = target.nextTurn ? target.nextTurn.endIndex + 1 : target.turn.endIndex + 1;
   const extra = range.end >= extraStart
     ? `<div class="${practiceStyles.afterExtra}"><span class="small-label">その先のセリフ</span><div class="${practiceStyles.scriptStream}">${renderBlockRange(allBlocks, extraStart, range.end, speakerTurns, practiceStyles.extraBlock)}</div></div>`
@@ -1289,18 +1720,50 @@ function renderBlockRange(
     const firstBlock = group.blocks[0];
     const lastBlock = group.blocks[group.blocks.length - 1];
     if (!firstBlock || !lastBlock) return "";
-    const separator = firstBlock.direction === "vertical" ? "" : "\\n";
-    const text = group.blocks.map((block) => block.text).join(separator);
+
     return `
       <article class="${practiceStyles.scriptBlock}${variantClass ? ` ${variantClass}` : ""}" data-page="${firstBlock.pageNumber}">
         <span class="${practiceStyles.scriptPosition}">${escapeHtml(practiceRangePosition(firstBlock, lastBlock))}</span>
-        <p dir="auto">${renderScriptContent(text)}</p>
+        <p dir="auto">${renderScriptBlocks(group.blocks)}</p>
       </article>`;
   }).join("");
 }
 
-function renderScriptContent(text: string): string {
-  return splitStageDirectionText(text, usableRoleCandidates())
+function renderScriptBlocks(sourceBlocks: SourceBlock[]): string {
+  const roles = usableRoleCandidates();
+  const fragments: string[] = [];
+  let pendingText = "";
+  let pendingStage = "";
+  let previousStageBlock: SourceBlock | undefined;
+  for (const block of sourceBlocks) {
+    const blockText = (block.boundaryRoleId === null ? block.speakerLabel ?? "" : "") + block.text;
+    const separator = block.direction === "vertical" ? "" : "\n";
+    const startsSpeech = block.boundaryRoleId !== null && Boolean(block.speakerLabel || block.boundaryRoleId || cueAtStart(block.text, recoveredOpeningMarkers, usableRoleCandidates()));
+    const continuesStage = previousStageBlock &&
+      !startsSpeech &&
+      block.direction === "vertical" &&
+      block.pageNumber === previousStageBlock.pageNumber &&
+      block.orderOnPage === previousStageBlock.orderOnPage + 1 &&
+      Math.abs(block.y - previousStageBlock.y) <= (block.fontSize ?? 12) / 2;
+    if (continuesStage || (!block.boundaryRoleId && isStageDirectionBlock(block, roles))) {
+      if (pendingText) fragments.push(renderScriptContent(pendingText, roles));
+      pendingStage += blockText;
+      pendingText = "";
+      previousStageBlock = block;
+    } else {
+      if (pendingStage) fragments.push(`<span class="stage-direction">${escapeHtml(pendingStage)}</span>`);
+      pendingStage = "";
+      pendingText += (pendingText ? separator : "") + blockText;
+      previousStageBlock = undefined;
+    }
+  }
+  if (pendingText) fragments.push(renderScriptContent(pendingText, roles));
+  if (pendingStage) fragments.push(`<span class="stage-direction">${escapeHtml(pendingStage)}</span>`);
+  return fragments.join("");
+}
+
+function renderScriptContent(text: string, roles: RoleCandidate[]): string {
+  return splitStageDirectionText(text, roles)
     .map((fragment) => fragment.kind === "stage-direction"
       ? `<span class="stage-direction">${escapeHtml(fragment.text)}</span>`
       : escapeHtml(fragment.text))
@@ -1363,20 +1826,20 @@ function rangeFor(target: PracticeTarget): PracticeRange {
 
 function positionAt(allBlocks: SourceBlock[], index: number): string {
   const block = allBlocks[Math.max(0, Math.min(index, allBlocks.length - 1))];
-  return block ? blockPosition(block) : "位置を確認できません";
+  return block ? blockPosition(block) : "位置が不明です";
 }
 
 function roleLabel(roleId: string): string {
-  return state.roles.find((role) => role.id === roleId)?.label ?? "役名未確認";
+  return state.roles.find((role) => role.id === roleId)?.label ?? "役名不明";
 }
 
 function formatPageRange(start: number, end: number): string {
-  return start === end ? `p.${start}` : `p.${start}–${end}`;
+  return start === end ? `${start}ページ目` : `${start}〜${end}ページ目`;
 }
 
 function refreshAutomaticRoles(): void {
   const existing = new Map(state.roles.map((role) => [role.id, role]));
-  const automatic = detectRoleCandidates(blocks())
+  const automatic = detectRoleCandidates(blocks(false))
     .filter((role) => !state.excludedRoleIds.has(role.id))
     .map((detected) => {
       const previous = existing.get(detected.id);
@@ -1442,13 +1905,13 @@ async function openPdf(file: File): Promise<void> {
   state.loading = true;
   state.loadingPurpose = "opening-pdf";
   state.progress = 0;
-  state.progressLabel = "PDFを開いています";
+  state.progressLabel = "PDFを読み取っています";
   renderApp();
 
   try {
     const loaded = await loadPdf(file, (pageNumber, pageCount) => {
       state.progress = Math.round((pageNumber / pageCount) * 100);
-      state.progressLabel = `${pageNumber} / ${pageCount} ページを確認中`;
+      state.progressLabel = `${pageNumber} / ${pageCount}ページを読み取り中`;
       const bar = document.querySelector<HTMLDivElement>("#load-progress-bar");
       const label = document.querySelector<HTMLElement>("#load-progress-label");
       if (bar) bar.style.width = `${state.progress}%`;
@@ -1459,6 +1922,8 @@ async function openPdf(file: File): Promise<void> {
     state.disposePdf = loaded.dispose;
     state.pages = loaded.pages;
     state.originalPages = [...loaded.pages];
+    recognizedPageCache.clear();
+    boundaryDraft = null;
     state.pdfFingerprint = loaded.fingerprint;
     state.cachedOcrPages = [];
     state.savedPractice = null;
@@ -1470,6 +1935,8 @@ async function openPdf(file: File): Promise<void> {
     state.excludedRoleIds = new Set();
     state.selectedRoleId = "";
     state.manualSpeakers = {};
+    state.boundaryEdits = [];
+
     state.ranges = {};
     state.currentTargetIndex = 0;
     state.revealed = false;
@@ -1481,21 +1948,25 @@ async function openPdf(file: File): Promise<void> {
     state.ocrProgress = 0;
     state.ocrTotal = 0;
     state.ocrStatus = "";
-    state.ocrError = "";
+    state.ocrErrors = { text: "", layout: "" };
+    state.textOcrCompletion = null;
+    state.layoutPreview = null;
+    state.ocrAnalysisComplete = false;
+    state.textOcrPreview = null;
     refreshAutomaticRoles();
     state.screen = "analysis";
     state.loading = Boolean(requestedResumeFingerprint);
     if (requestedResumeFingerprint) {
       state.loadingPurpose = "restoring-practice";
       state.progress = 100;
-      state.progressLabel = "練習設定を確認しています";
+      state.progressLabel = "練習設定を復元しています";
     }
     renderApp();
     await findSavedPractice(loaded.fingerprint, loaded.pages.length, requestedResumeFingerprint);
   } catch {
     state.loading = false;
     state.error = "このPDFを読み取れませんでした。パスワードで保護されている場合は、保護を解除したPDFを選んでください。";
-    if (requestedResumeFingerprint) notify("このPDFを読み取れなかったため、前回の練習設定を使えませんでした。", "warning");
+    if (requestedResumeFingerprint) notify("このPDFを読み取れなかったため、前回の練習設定を復元できませんでした。", "warning");
     renderApp();
   }
 }
@@ -1518,7 +1989,7 @@ async function findSavedPractice(
     state.loading = false;
     if (requestedResumeFingerprint) {
       state.screen = "analysis";
-      notify("このPDFを照合できないため、保存した練習設定を使えませんでした。", "warning");
+      notify("このPDFを照合できないため、前回の練習設定を復元できませんでした。", "warning");
     }
     renderApp();
     return;
@@ -1566,7 +2037,7 @@ async function findSavedPractice(
     }
   } catch {
     if (state.pdfFingerprint !== fingerprint) return;
-    notify("このブラウザに保存した設定を読み込めませんでした。PDFは通常どおり使えます。", "warning");
+    notify("前回の練習設定を復元できませんでした。このPDFで練習を始められます。", "warning");
   }
 
   await refreshSavedPracticeList();
@@ -1575,7 +2046,7 @@ async function findSavedPractice(
     state.loading = false;
     if (requestedResumeFingerprint && state.screen !== "appearances") state.screen = "analysis";
     if (restoredPreviousImageAnalysis) {
-      notify("前回の画像解析結果を適用しました。役名を選んで練習を始めてください。", "success");
+      notify("前回の画像解析結果を適用しました。練習する役を選んでください。", "success");
     }
     renderApp();
   }
@@ -1611,6 +2082,8 @@ function applySavedPractice(saved: SavedPractice): void {
   state.excludedRoleIds = new Set(saved.settings.excludedRoleIds);
   state.selectedRoleId = saved.settings.selectedRoleId;
   state.manualSpeakers = { ...saved.settings.manualSpeakers };
+  state.boundaryEdits = saved.settings.boundaryEdits ?? [];
+
   state.manualRoleNumber = saved.settings.manualRoleNumber;
   state.corrections = { ...saved.settings.corrections };
   state.ranges = structuredClone(saved.settings.ranges);
@@ -1637,15 +2110,15 @@ function applySavedPractice(saved: SavedPractice): void {
   if (targetCount === 0) {
     state.screen = "analysis";
     notify(outdatedRecognition
-      ? "役の設定は戻しました。文字の読み取り方法が変わったため、画像解析をやり直してください。"
-      : "前回の練習設定は読み込みましたが、シーンが見つかりませんでした。読み取り結果を確認してください。", "warning");
+      ? "役の設定は復元しました。文字の読み取り方法が変わったため、画像解析をやり直してください。"
+      : "前回の練習設定は復元しましたが、練習シーンが見つかりませんでした。読み取り結果を確認してください。", "warning");
   } else {
     state.currentTargetIndex = Math.min(Math.max(0, saved.settings.currentTargetIndex), targetCount - 1);
     state.screen = "appearances";
     state.practiceHasStarted = true;
     notify(outdatedRecognition
-      ? `前回の「${selectedRole()?.label ?? "選んだ役"}」の設定を戻しました。画像解析は設定からやり直せます。`
-      : `前回の「${selectedRole()?.label ?? "選んだ役"}」の設定で、続きから練習できます。`, outdatedRecognition ? "info" : "success");
+      ? `前回の「${selectedRole()?.label ?? "選んだ役"}」の練習設定を復元しました。読み取り結果から画像解析をやり直せます。`
+      : `前回の「${selectedRole()?.label ?? "選んだ役"}」の練習設定を復元しました。`, outdatedRecognition ? "info" : "success");
   }
   renderApp();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1663,6 +2136,7 @@ function currentPracticeSnapshot(): SavedPracticeInput | null {
       excludedRoleIds: [...state.excludedRoleIds],
       selectedRoleId: state.selectedRoleId,
       manualSpeakers: { ...state.manualSpeakers },
+      boundaryEdits: state.boundaryEdits,
       manualRoleNumber: state.manualRoleNumber,
       corrections: { ...state.corrections },
       ranges: structuredClone(state.ranges),
@@ -1673,7 +2147,7 @@ function currentPracticeSnapshot(): SavedPracticeInput | null {
 }
 
 async function saveCurrentPractice(): Promise<SavedPractice> {
-  if (!canSavePracticeHistory()) throw new Error("このブラウザでは端末内保存を利用できません。");
+  if (!canSavePracticeHistory()) throw new Error("このブラウザでは練習設定を保存できません。");
   const snapshot = currentPracticeSnapshot();
   if (!snapshot) throw new Error("保存する練習設定が見つかりません。");
   const saved = await savePractice(snapshot);
@@ -1683,7 +2157,7 @@ async function saveCurrentPractice(): Promise<SavedPractice> {
 }
 
 async function continueToAppearances(): Promise<void> {
-  if (practiceTargets().length === 0 || state.ocrBusy || state.practiceSaveBusy) return;
+  if (practiceTargets().length === 0 || state.ocrBusy || state.layoutPreview || state.textOcrPreview || state.practiceSaveBusy) return;
   let saveError = false;
   if (state.practiceHasStarted) {
     clearScheduledPracticeSave();
@@ -1695,7 +2169,7 @@ async function continueToAppearances(): Promise<void> {
       saveError = true;
     }
     state.practiceSaveBusy = false;
-    if (saveError) notify("設定を保存できませんでした。前回の保存内容は残っています。", "warning");
+    if (saveError) notify("練習設定を保存できませんでした。前回保存した設定は残っています。", "warning");
   }
   state.screen = "appearances";
   renderApp();
@@ -1722,7 +2196,7 @@ async function beginPractice(targetIndex: number): Promise<void> {
   state.practiceHasStarted = true;
   state.revealed = false;
   state.showOriginal = false;
-  if (saveError) notify("練習は続けられますが、この端末に設定を保存できませんでした。", "warning");
+  if (saveError) notify("練習は続けられますが、この端末内に設定を保存できませんでした。", "warning");
   renderApp();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -1733,7 +2207,7 @@ function schedulePracticeSave(): void {
   practiceSaveTimer = window.setTimeout(() => {
     practiceSaveTimer = null;
     void saveCurrentPractice().catch(() => {
-      notify("練習設定をこの端末に更新できませんでした。", "warning");
+      notify("練習設定を保存できませんでした。", "warning");
       renderApp();
     });
   }, 600);
@@ -1744,57 +2218,55 @@ function clearScheduledPracticeSave(): void {
   practiceSaveTimer = null;
 }
 
-async function readWithOcr(): Promise<void> {
-  if (state.ocrBusy || !state.document) return;
-  const candidates = pagesNeedingOcr();
+async function readWithOcr(purpose: AppState["ocrPurpose"]): Promise<void> {
+  const adjustLayout = purpose === "layout";
+  if (state.ocrBusy || (adjustLayout && state.layoutPreview) || (!adjustLayout && (state.textOcrPreview || state.textOcrCompletion)) || !state.document) return;
+  const candidates = state.pages;
   if (candidates.length === 0) return;
 
   state.ocrBusy = true;
+  state.ocrPurpose = purpose;
+  if (!adjustLayout) state.textOcrCompletion = null;
   state.ocrCancelRequested = false;
   state.ocrProgress = 0;
   state.ocrTotal = candidates.length;
   state.ocrStatus = "画像解析の準備をしています";
-  state.ocrError = "";
+  state.ocrErrors[purpose] = "";
   renderApp();
 
   let reader: Awaited<ReturnType<typeof createLocalOcrReader>> | null = null;
-  let replacedPages = 0;
   const failedPages: number[] = [];
+  let initializationFailed = false;
   const characterMappingEvidence: CharacterMappingEvidence[] = [];
-  const updatedPages = [...state.pages];
-  const candidateSourcePages = new Map(candidates.map((page) => [page.pageNumber, page]));
   const recognizedPages = new Map<number, SourcePage>();
+  const layoutResults: SourcePage[] = [];
 
   try {
-    reader = await createLocalOcrReader((progress: OcrProgress) => {
-      state.ocrStatus = readableOcrStatus(progress.status);
-      updateOcrProgress();
-    });
-
     for (const sourcePage of candidates) {
       if (state.ocrCancelRequested) break;
       state.ocrStatus = "文字を読み取っています";
       updateOcrProgress();
 
       try {
-        const recognizedPage = await reader.readPage(
-          state.document,
-          sourcePage.pageNumber,
-          sourcePage.direction,
-        );
-        recognizedPages.set(sourcePage.pageNumber, recognizedPage);
-        const mergedPage = mergeRecognizedPage(
-          sourcePage,
-          recognizedPage,
-          characterMappingEvidence,
-        );
-        if (mergedPage === sourcePage) {
-          failedPages.push(sourcePage.pageNumber);
-        } else {
-          updatedPages[sourcePage.pageNumber - 1] = mergedPage;
-          replacedPages += 1;
+        let recognizedPage = recognizedPageCache.get(sourcePage.pageNumber);
+        if (!recognizedPage || recognizedPage.direction !== sourcePage.direction) {
+          reader ??= await createLocalOcrReader((progress: OcrProgress) => {
+            state.ocrStatus = readableOcrStatus(progress.status);
+            updateOcrProgress();
+          });
+          recognizedPage = await reader.readPage(state.document, sourcePage.pageNumber, sourcePage.direction);
+          recognizedPageCache.set(sourcePage.pageNumber, recognizedPage);
         }
-      } catch {
+        recognizedPages.set(sourcePage.pageNumber, recognizedPage);
+        mergeRecognizedPage(sourcePage, recognizedPage, characterMappingEvidence);
+        const preview = mergeRecognizedPage({ ...sourcePage, blocks: [] }, recognizedPage);
+        if (preview.blocks.some((block) => block.text.trim())) layoutResults.push(preview);
+        else failedPages.push(sourcePage.pageNumber);
+      } catch (error) {
+        if (error instanceof OcrInitializationError) {
+          initializationFailed = true;
+          break;
+        }
         failedPages.push(sourcePage.pageNumber);
       }
 
@@ -1803,33 +2275,40 @@ async function readWithOcr(): Promise<void> {
       updateOcrProgress();
     }
 
-    if (replacedPages > 0) {
-      const inferredCorrections = inferDocumentCharacterCorrections(characterMappingEvidence);
-      state.pages = updatedPages.map((page) => {
-        const sourcePage = candidateSourcePages.get(page.pageNumber);
-        const recognizedPage = recognizedPages.get(page.pageNumber);
-        return sourcePage && recognizedPage
-          ? mergeRecognizedPage(sourcePage, recognizedPage, undefined, inferredCorrections)
-          : page;
-      });
-      state.corrections = inferredCorrections;
-      state.manualSpeakers = {};
-      state.ranges = {};
-      state.currentTargetIndex = 0;
-      refreshAutomaticRoles();
+    if (layoutResults.length > 0 && !state.layoutPreview) {
+      state.layoutPreview = layoutResults;
+      if (!layoutResults.some((page) => page.pageNumber === state.previewPage)) {
+        state.previewPage = layoutResults[0].pageNumber;
+      }
+    }
+
+    if (recognizedPages.size > 0 && !state.textOcrPreview && !state.textOcrCompletion) {
+      state.textOcrPreview = {
+        pages: [...recognizedPages.values()],
+        corrections: inferDocumentCharacterCorrections(characterMappingEvidence),
+      };
+    }
+    if (recognizedPages.size === candidates.length && !initializationFailed && failedPages.length === 0) {
+      state.ocrAnalysisComplete = true;
+      state.ocrErrors = { text: "", layout: "" };
     }
 
     if (state.ocrCancelRequested) {
-      state.ocrError = "画像解析を途中で止めました。解析できたページは残っています。";
+      const hasResults = adjustLayout ? layoutResults.length > 0 : recognizedPages.size > 0;
+      const resultMessage = "解析できたページの結果を確認できます。";
+      state.ocrErrors[purpose] = hasResults ? `画像解析を中止しました。${resultMessage}` : "画像解析を中止しました。";
+    } else if (initializationFailed) {
+      const hasResults = adjustLayout ? layoutResults.length > 0 : recognizedPages.size > 0;
+      const resultMessage = "解析できたページの結果を確認できます。";
+      const retryMessage = hasResults ? resultMessage : "ページを開き直して、もう一度お試しください。";
+      state.ocrErrors[purpose] = `画像解析の準備ができなかったため、処理を停止しました。${retryMessage}`;
     } else if (failedPages.length > 0) {
-      const pageList = failedPages.slice(0, 6).map((page) => `p.${page}`).join("、");
-      const remaining = failedPages.length > 6 ? ` ほか ${failedPages.length - 6} ページ` : "";
-      state.ocrError = `${failedPages.length} ページを解析できませんでした（${pageList}${remaining}）。元の文字抽出を表示しています。`;
-    } else if (replacedPages === 0) {
-      state.ocrError = "文字を読み直せませんでした。元のPDFと見比べ、役名や文字を確認してください。";
+      const pageList = failedPages.slice(0, 6).map((page) => `${page}ページ目`).join("、");
+      const remaining = failedPages.length > 6 ? ` ほか ${failedPages.length - 6}ページ` : "";
+      state.ocrErrors[purpose] = `${failedPages.length}ページを解析できませんでした（${pageList}${remaining}）。解析できなかったページには、画像解析前の読み取り結果を表示しています。`;
     }
   } catch {
-    state.ocrError = "画像解析を完了できませんでした。元の文字抽出は残っています。";
+    state.ocrErrors[purpose] = "画像解析を完了できませんでした。画像解析前の読み取り結果は残っています。";
   } finally {
     if (reader) {
       try {
@@ -1857,7 +2336,7 @@ function updateOcrProgress(): void {
   const count = document.querySelector<HTMLElement>("#image-analysis-progress-count");
   const bar = document.querySelector<HTMLDivElement>("#image-analysis-progress-bar");
   if (label) label.textContent = state.ocrStatus;
-  if (count) count.textContent = `読み取り済み ${state.ocrProgress} / ${state.ocrTotal} ページ`;
+  if (count) count.textContent = `処理済み ${state.ocrProgress} / ${state.ocrTotal}ページ`;
   if (bar) {
     const percent = state.ocrTotal > 0
       ? Math.round((state.ocrProgress / state.ocrTotal) * 100)
@@ -1868,24 +2347,42 @@ function updateOcrProgress(): void {
   }
 }
 
-function restorePdfText(): void {
-  if (state.ocrBusy || state.originalPages.length === 0) return;
-  state.pages = [...state.originalPages];
-  state.corrections = {};
-  state.manualSpeakers = {};
+function hasBoundaryEditsOnPage(pageNumber: number): boolean {
+  const blockIds = new Set(blocks(false).filter((block) => block.pageNumber === pageNumber).map((block) => block.id));
+  return state.boundaryEdits.some((edit) => blockIds.has(edit.blockId));
+}
+
+function replaceReadingPages(pages: SourcePage[]): void {
+  const restoresPdfText = pages.some((page) => page.textSource === "pdf-text");
+  if (restoresPdfText) {
+    state.textOcrCompletion = null;
+    state.ocrErrors.text = "";
+  }
+  const replacements = new Map(pages.map((page) => [page.pageNumber, page]));
+  const replacedBlocks = blocks().filter((block) => replacements.has(block.pageNumber));
+  const replacedBlockIds = new Set(replacedBlocks.map((block) => block.id));
+  const replacedOrigins = new Set(replacedBlocks.map((block) => block.boundaryOrigin?.blockId ?? block.id));
+  state.boundaryEdits = state.boundaryEdits.filter((edit) => !replacedOrigins.has(edit.blockId));
+
+  state.manualSpeakers = Object.fromEntries(
+    Object.entries(state.manualSpeakers).filter(([id]) => !replacedBlockIds.has(id)),
+  );
+  state.pages = state.pages.map((page) => replacements.get(page.pageNumber) ?? page);
+  state.layoutPreview = null;
   state.ranges = {};
   state.currentTargetIndex = 0;
-  state.ocrError = "";
+  state.ocrErrors.layout = "";
   refreshAutomaticRoles();
   renderApp();
 }
 
 function applyCachedImageAnalysis(showNotification = true): void {
   if (state.ocrBusy || state.cachedOcrPages.length === 0) return;
+  state.textOcrCompletion = null;
   const savedPages = new Map(state.cachedOcrPages.map((page) => [page.pageNumber, page]));
   state.pages = state.pages.map((page) => {
     const saved = savedPages.get(page.pageNumber);
-    return saved ? mergeRecognizedPage(page, saved) : page;
+    return saved?.textSource === "ocr" ? saved : saved ? mergeRecognizedPage(page, saved) : page;
   });
   state.corrections = {};
   state.manualSpeakers = {};
@@ -1893,9 +2390,9 @@ function applyCachedImageAnalysis(showNotification = true): void {
   state.currentTargetIndex = 0;
   state.selectedRoleId = "";
   state.previewPage = state.cachedOcrPages[0]?.pageNumber ?? state.previewPage;
-  state.ocrError = "";
+  state.ocrErrors = { text: "", layout: "" };
   state.cachedOcrPages = [];
-  if (showNotification) notify("前回の画像解析結果を適用しました。役名を選んで練習を始めてください。", "success");
+  if (showNotification) notify("前回の画像解析結果を適用しました。練習する役を選んでください。", "success");
   refreshAutomaticRoles();
   renderApp();
 }
@@ -1904,14 +2401,14 @@ function restoreSavedCorrections(): void {
   const savedCorrections = state.savedPractice?.settings.corrections;
   if (!savedCorrections || Object.keys(savedCorrections).length === 0) return;
   state.corrections = { ...savedCorrections, ...state.corrections };
-  notify("前回の文字の置き換えを読み込みました。", "success");
+  notify("前回の文字の置換を適用しました。", "success");
   refreshAutomaticRoles();
   renderApp();
 }
 
 async function deleteAllSavedPracticeDataFromDevice(): Promise<void> {
   if (state.savedPractices.length + state.legacySavedReadings.length === 0 || state.ocrBusy || state.practiceSaveBusy) return;
-  if (!window.confirm("この端末に保存した練習設定と読み取り結果をすべて削除しますか？PDFファイルは削除されません。")) return;
+  if (!window.confirm("この端末内に保存した練習設定と読み取り結果をすべて削除しますか？PDFファイルは削除されません。")) return;
   try {
     await deleteAllSavedPracticeData();
     state.savedPractices = [];
@@ -1966,6 +2463,14 @@ async function closePdf(): Promise<void> {
   state.disposePdf = null;
   state.pages = [];
   state.originalPages = [];
+  boundaryDraft = null;
+  state.ocrAnalysisComplete = false;
+  state.textOcrPreview = null;
+  state.textOcrCompletion = null;
+  recognizedPageCache.clear();
+  state.boundaryEdits = [];
+
+  state.layoutPreview = null;
   state.pdfFingerprint = null;
   state.cachedOcrPages = [];
   state.savedPractice = null;
@@ -1996,7 +2501,7 @@ async function closePdf(): Promise<void> {
   state.ocrProgress = 0;
   state.ocrTotal = 0;
   state.ocrStatus = "";
-  state.ocrError = "";
+  state.ocrErrors = { text: "", layout: "" };
   const fileInput = document.querySelector<HTMLInputElement>("#pdf-input");
   if (fileInput) fileInput.value = "";
   renderApp();
@@ -2035,16 +2540,48 @@ root.addEventListener("click", (event) => {
       void closePdf();
       break;
     case "read-with-ocr":
-      void readWithOcr();
+      void readWithOcr("text");
       break;
     case "cancel-ocr":
       state.ocrCancelRequested = true;
-      state.ocrStatus = "現在のページを解析した後に止めます";
+      state.ocrStatus = "処理中のページが終わり次第、画像解析を中止します";
       updateOcrProgress();
       break;
-    case "restore-pdf-text":
-      restorePdfText();
+    case "assign-selected-speaker":
+      applyScriptEditor(true);
       break;
+    case "unassign-selected-speaker":
+      unassignSelectedSpeaker();
+      break;
+    case "apply-ocr-text":
+      applyTextOcrPreview();
+      break;
+    case "discard-ocr-text":
+      state.textOcrPreview = null;
+      renderApp();
+      break;
+    case "preview-ocr-layout":
+      void readWithOcr("layout");
+      break;
+    case "apply-ocr-layout":
+      if (!state.ocrBusy && state.layoutPreview) replaceReadingPages(state.layoutPreview);
+      break;
+    case "discard-ocr-layout":
+      state.layoutPreview = null;
+      renderApp();
+      break;
+    case "restore-preview-page-text": {
+      const originalPage = state.originalPages[state.previewPage - 1];
+      if (!state.ocrBusy && !state.layoutPreview && originalPage) {
+        const changes = [
+          hasBoundaryEditsOnPage(originalPage.pageNumber) ? "このページの手動の区切り" : "",
+          Object.keys(state.ranges).length ? "調整した練習範囲" : "",
+        ].filter(Boolean);
+        if (changes.length && !window.confirm(`PDFからの読み取り結果に戻すと、${changes.join("と")}が初期設定に戻ります。`)) break;
+        replaceReadingPages([originalPage]);
+      }
+      break;
+    }
     case "use-previous-image-analysis":
       applyCachedImageAnalysis();
       break;
@@ -2070,6 +2607,11 @@ root.addEventListener("click", (event) => {
       state.excludedRoleIds.add(roleId);
       state.roles = state.roles.filter((role) => role.id !== roleId);
       state.manualSpeakers = Object.fromEntries(Object.entries(state.manualSpeakers).filter(([, id]) => id !== roleId));
+      if (state.boundaryEdits.some((edit) => edit.roleId === roleId)) {
+        state.boundaryEdits = state.boundaryEdits.filter((edit) => edit.roleId !== roleId);
+        state.ranges = {};
+        state.currentTargetIndex = 0;
+      }
       if (state.selectedRoleId === roleId) state.selectedRoleId = "";
       renderApp();
       break;
@@ -2234,13 +2776,18 @@ root.addEventListener("change", (event) => {
   if (target instanceof HTMLInputElement && target.dataset.correctionChar) {
     const character = target.dataset.correctionChar;
     const replacement = target.value;
+    if ((state.corrections[character] ?? "") !== replacement && state.boundaryEdits.length) {
+      state.ranges = {};
+      state.currentTargetIndex = 0;
+    }
     if (replacement.trim()) state.corrections[character] = replacement;
     else delete state.corrections[character];
     refreshAutomaticRoles();
+    renderApp();
     return;
   }
 
-  if (target instanceof HTMLSelectElement && target.id === "preview-page-select") {
+  if (target instanceof HTMLSelectElement && (target.id === "preview-page-select" || target.id === "layout-ocr-page-select" || target.id === "text-ocr-page-select")) {
     goToPreviewPage(Number(target.value));
     return;
   }
@@ -2253,8 +2800,55 @@ root.addEventListener("change", (event) => {
 
 });
 
+root.addEventListener("scroll", (event) => {
+  if (event.target instanceof HTMLTextAreaElement && event.target.id === "full-script-editor") {
+    syncEditorHighlights();
+  }
+}, true);
+
+root.addEventListener("mouseup", (event) => {
+  if (event.target instanceof HTMLTextAreaElement && event.target.id === "full-script-editor") {
+    showScriptSelectionToolbar({ x: event.clientX, y: event.clientY });
+  }
+});
+
+root.addEventListener("keyup", (event) => {
+  if (event.target instanceof HTMLTextAreaElement && event.target.id === "full-script-editor") {
+    if (event.key === "Escape") hideScriptSelectionToolbar();
+    else showScriptSelectionToolbar();
+  }
+});
+
+root.addEventListener("select", (event) => {
+  if (event.target instanceof HTMLTextAreaElement && event.target.id === "full-script-editor") showScriptSelectionToolbar();
+});
+
+root.addEventListener("pointerdown", (event) => {
+  if (event.target instanceof Element && !event.target.closest("#full-script-editor, #script-selection-toolbar")) {
+    hideScriptSelectionToolbar();
+  }
+});
+
+window.addEventListener("resize", hideScriptSelectionToolbar);
+
 root.addEventListener("input", (event) => {
   const target = event.target;
+  if (target instanceof HTMLTextAreaElement && target.id === "full-script-editor") {
+    if (event instanceof InputEvent && event.isComposing) return;
+    target.setCustomValidity("");
+    const model = scriptEditorModel();
+    if (target.value.replace(/\n/g, "") !== model.text.replace(/\n/g, "")) {
+      const position = target.selectionStart;
+      target.value = model.text;
+      target.setSelectionRange(Math.min(position, target.value.length), Math.min(position, target.value.length));
+      showScriptEditorError("ここでは改行で区切りを調整できます。本文の文字は「文字の置換」で直せます。");
+      return;
+    }
+    boundaryDraft = { source: model.text, text: target.value };
+    applyScriptEditor(false);
+    syncEditorHighlights();
+    return;
+  }
   if (!(target instanceof HTMLInputElement)) return;
 
   if (target.dataset.roleLabel) {
