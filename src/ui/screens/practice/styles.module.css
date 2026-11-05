@@ -1,0 +1,358 @@
+.root {
+  width: min(100% - 2rem, 1200px);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100dvh - 72px);
+  margin: 0 auto;
+  padding: 1.75rem 0 2.5rem;
+}
+
+.topline,
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.topline {
+  margin-bottom: 1.25rem;
+}
+
+.progress-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-label,
+.progress-separator {
+  color: var(--muted-color);
+}
+
+.heading {
+  align-items: flex-end;
+  margin-bottom: 1rem;
+}
+
+.heading h1 {
+  margin: 0.25rem 0 0;
+  font-size: clamp(1.5rem, 3vw, 1.875rem);
+  font-weight: var(--weight-heading);
+}
+
+.heading h1 span {
+  color: var(--muted-color);
+  font-size: 0.8em;
+}
+
+.meta,
+.correction-reminder {
+  margin: 0;
+  color: var(--muted-color);
+}
+
+.correction-reminder {
+  margin-bottom: 0.75rem;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 230px;
+  align-items: start;
+  gap: 1rem;
+}
+
+.card {
+  min-width: 0;
+}
+
+.card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.page-tag {
+  color: var(--muted-color);
+  font-size: 0.875rem;
+}
+
+.script-stream {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.context-stream {
+  padding: 0;
+}
+
+.script-block {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: var(--card-padding-block) var(--card-padding-inline);
+  border: 1px solid var(--border-color);
+  background: var(--surface-color);
+}
+
+.script-position {
+  padding-top: 0.25rem;
+  color: var(--muted-color);
+  font-size: 0.8rem;
+}
+
+.script-block p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  font-size: 1.0625rem;
+  line-height: 1.9;
+}
+
+.context-block p,
+.extra-block p {
+  color: var(--muted-color);
+}
+
+.no-context {
+  padding: 1rem 0;
+  color: var(--muted-color);
+}
+
+.no-context p {
+  margin: 0;
+}
+
+.answer-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1rem 0 0;
+  padding: var(--card-padding-block) var(--card-padding-inline);
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--accent-color);
+  border-radius: var(--shape-small);
+  background: var(--accent-soft);
+  text-align: center;
+}
+
+.answer-prompt p,
+.hidden-hint {
+  margin: 0;
+  color: var(--muted-color);
+}
+
+.hidden-hint {
+  font-size: 0.875rem;
+}
+
+.reveal-button {
+  min-width: 10rem;
+}
+
+.revealed-answer {
+  margin-top: auto;
+}
+
+.answer-section {
+  margin-top: 1.25rem;
+}
+
+.answer-section-heading {
+  margin-bottom: 0.5rem;
+}
+
+.answer-section-heading h2 {
+  margin: 0.25rem 0 0;
+  font-size: var(--type-title);
+  font-weight: var(--weight-heading);
+}
+
+.own-speech-section .script-block,
+.next-speech-section .script-block {
+  background: var(--surface-color);
+}
+
+.own-speech-section .script-block {
+  border-color: var(--accent-color);
+  background: var(--accent-soft);
+}
+
+.next-speech-missing {
+  margin-top: 1.25rem;
+  padding: var(--card-padding-block) var(--card-padding-inline);
+  border: 1px solid var(--border-color);
+  border-radius: var(--shape-small);
+}
+
+.next-speech-missing p {
+  margin: 0.375rem 0 0;
+  color: var(--muted-color);
+}
+
+.after-extra {
+  margin-top: 1rem;
+}
+
+.after-extra > :global(.small-label) {
+  margin-bottom: 0.25rem;
+}
+
+.range-details {
+  margin-top: 1.25rem;
+}
+
+.range-controls {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem 0 0;
+}
+
+.range-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.375rem 1rem;
+}
+
+.range-control small {
+  grid-column: 1 / -1;
+  color: var(--muted-color);
+}
+
+.range-slider {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: var(--accent-color);
+}
+
+.reset-range {
+  justify-self: start;
+}
+
+.side-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.side-card {
+  padding: var(--card-padding-block) var(--card-padding-inline);
+  border: 1px solid var(--border-color);
+  border-radius: var(--shape-small);
+}
+
+.mini-progress {
+  height: 6px;
+  overflow: hidden;
+  margin: 0.75rem 0 0.5rem;
+  border-radius: var(--shape-small);
+  background: var(--surface-muted);
+}
+
+/* biome-ignore lint/style/noDescendingSpecificity: 見出し内のspanと進捗バーのspanは別の要素であり、スタイルは競合しません。 */
+.mini-progress span {
+  height: 100%;
+  display: block;
+  background: var(--accent-color);
+}
+
+.progress-card > p,
+.source-card p {
+  margin: 0;
+  color: var(--muted-color);
+  font-size: 0.875rem;
+}
+
+.source-card button {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+.source-preview {
+  margin-top: 1rem;
+}
+
+.source-preview :global(.pdf-canvas-scroll) {
+  max-height: 75vh;
+}
+
+.navigation {
+  position: sticky;
+  z-index: 2;
+  bottom: calc(0.5rem + env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: var(--card-padding-block) var(--card-padding-inline);
+  border: 1px solid var(--border-color);
+  border-radius: var(--shape-small);
+  background: var(--surface-color);
+}
+
+.navigation > * {
+  width: 100%;
+}
+
+.keyboard-help {
+  margin: 0.75rem 0 0;
+  color: var(--muted-color);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.last-utterance-note {
+  margin-top: 1rem;
+}
+
+@media (max-width: 850px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr) 200px;
+  }
+}
+
+@media (max-width: 640px) {
+  .topline {
+    align-items: center;
+  }
+
+  .root {
+    width: min(100% - 1.5rem, 1200px);
+    padding-top: 1.5rem;
+  }
+
+  .heading {
+    align-items: flex-start;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .script-block {
+    grid-template-columns: 5rem minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .side-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .navigation {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .navigation > * {
+    min-width: 0;
+    padding-right: 0.5rem;
+    padding-left: 0.5rem;
+    white-space: normal;
+  }
+}

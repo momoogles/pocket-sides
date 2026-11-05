@@ -282,6 +282,14 @@ button:disabled {
   color: var(--muted-color);
 }
 
+.progress-shell {
+  height: 8px;
+  overflow: hidden;
+  margin: var(--space-6) 0 var(--space-3);
+  border-radius: var(--shape-small);
+  background: var(--surface-muted);
+}
+
 .loading-page {
   flex: 1;
   display: grid;
@@ -324,14 +332,6 @@ button:disabled {
   margin: 0;
 }
 
-.progress-shell {
-  height: 8px;
-  overflow: hidden;
-  margin: var(--space-6) 0 var(--space-3);
-  border-radius: var(--shape-small);
-  background: var(--surface-muted);
-}
-
 .progress-bar {
   height: 100%;
   background: var(--accent-color);
@@ -340,7 +340,10 @@ button:disabled {
 
 .progress-copy {
   color: var(--muted-color);
-  font-size: 0.875rem !important;
+}
+
+.loading-page > .progress-copy {
+  font-size: 0.875rem;
 }
 
 .error-page > p {
@@ -660,9 +663,14 @@ summary {
   *,
   *::before,
   *::after {
+    /* OSの動作軽減設定を優先するため、すべてのアニメーションより優先させます。 */
+    /* biome-ignore lint/complexity/noImportantStyles: 動作軽減設定の指定を優先するため、importantが必要です。 */
     scroll-behavior: auto !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 動作軽減設定の指定を優先するため、importantが必要です。 */
     animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 動作軽減設定の指定を優先するため、importantが必要です。 */
     animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 動作軽減設定の指定を優先するため、importantが必要です。 */
     transition-duration: 0.01ms !important;
   }
 }

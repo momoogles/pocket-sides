@@ -1,0 +1,1 @@
+export const OCR_RECOGNITION_VERSION = 16;
