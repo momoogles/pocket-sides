@@ -15,5 +15,5 @@ outputs/
 *.log
 .DS_Store
 
-# Local-only Codex project instructions
-/AGENTS.md
+# Local-only project instructions
+/AGENTS.override.md
