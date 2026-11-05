@@ -21,6 +21,9 @@ interface CandidateAccumulator {
   pageNumbers: Set<number>;
 }
 
+// One quote-like prefix can be ordinary prose, so quote-only labels need recurrence.
+const MINIMUM_REPEATED_QUOTED_CUE_OCCURRENCES = 2;
+
 export function detectRoleCandidates(blocks: SourceBlock[]): RoleCandidate[] {
   const recoveredOpeningMarkers = inferRecoveredOpeningMarkers(blocks);
   const initial = collectRoleCandidates(blocks, recoveredOpeningMarkers);
@@ -124,9 +127,10 @@ function collectRoleCandidates(
     .map(({ role }) => role)
     .filter(
       (role) =>
-        !usesSpacedLabels ||
         role.evidence !== "quotation" ||
-        supportedQuotedNames.has(normalizeAlias(role.label)),
+        (role.occurrenceCount >= MINIMUM_REPEATED_QUOTED_CUE_OCCURRENCES &&
+          (!usesSpacedLabels ||
+            supportedQuotedNames.has(normalizeAlias(role.label)))),
     )
     .sort(
       (a, b) =>
