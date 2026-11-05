@@ -137,7 +137,14 @@ function appearanceOpeningLine(
     .map((block) => block.text)
     .join(utteranceBlocks[0]?.direction === "vertical" ? "" : "\n");
   const roles = usableRoleCandidates();
-  const speechText = splitStageDirectionText(rawText, roles)
+  const leadingSpeakerLabel =
+    utteranceBlocks[0]?.speakerLabel ??
+    roles.find((role) => role.id === utteranceBlocks[0]?.boundaryRoleId)?.label;
+  const speechText = splitStageDirectionText(
+    rawText,
+    roles,
+    leadingSpeakerLabel,
+  )
     .filter((fragment) => fragment.kind === "speech")
     .map((fragment) => fragment.text)
     .join("")

@@ -17,6 +17,15 @@ export function renderScriptBlocks(sourceBlocks: SourceBlock[]): string {
   let pendingText = "";
   let pendingStage = "";
   let previousStageBlock: SourceBlock | undefined;
+  let pendingSpeakerLabel: string | undefined;
+  const flushPendingText = () => {
+    if (!pendingText) return;
+    fragments.push(
+      renderScriptContent(pendingText, roles, pendingSpeakerLabel),
+    );
+    pendingText = "";
+    pendingSpeakerLabel = undefined;
+  };
   for (const block of sourceBlocks) {
     const blockText =
       (block.boundaryRoleId === null ? (block.speakerLabel ?? "") : "") +
@@ -44,7 +53,7 @@ export function renderScriptBlocks(sourceBlocks: SourceBlock[]): string {
       continuesStage ||
       (!block.boundaryRoleId && isStageDirectionBlock(block, roles))
     ) {
-      if (pendingText) fragments.push(renderScriptContent(pendingText, roles));
+      flushPendingText();
       pendingStage += blockText;
       pendingText = "";
       previousStageBlock = block;
@@ -54,11 +63,17 @@ export function renderScriptBlocks(sourceBlocks: SourceBlock[]): string {
           `<span class="stage-direction">${escapeHtml(pendingStage)}</span>`,
         );
       pendingStage = "";
+      if (startsSpeech) flushPendingText();
+      if (!pendingText) {
+        pendingSpeakerLabel =
+          block.speakerLabel?.trim() ||
+          roles.find((role) => role.id === block.boundaryRoleId)?.label;
+      }
       pendingText += (pendingText ? separator : "") + blockText;
       previousStageBlock = undefined;
     }
   }
-  if (pendingText) fragments.push(renderScriptContent(pendingText, roles));
+  flushPendingText();
   if (pendingStage)
     fragments.push(
       `<span class="stage-direction">${escapeHtml(pendingStage)}</span>`,
@@ -69,8 +84,9 @@ export function renderScriptBlocks(sourceBlocks: SourceBlock[]): string {
 export function renderScriptContent(
   text: string,
   roles: RoleCandidate[],
+  leadingSpeakerLabel?: string,
 ): string {
-  return splitStageDirectionText(text, roles)
+  return splitStageDirectionText(text, roles, leadingSpeakerLabel)
     .map((fragment) =>
       fragment.kind === "stage-direction"
         ? `<span class="stage-direction">${escapeHtml(fragment.text)}</span>`
