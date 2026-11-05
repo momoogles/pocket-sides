@@ -20,6 +20,7 @@ interface PdfTextItemLike {
 interface PositionedTextItem extends SourceItem {
   fontSize: number;
   sourceItemIds?: string[];
+  hasSidewaysHalfwidthKatakana?: boolean;
 }
 
 export async function extractSourcePage(
@@ -51,6 +52,11 @@ export async function extractSourcePage(
       height: item.height,
       fontName: item.fontName,
       fontSize,
+      ...(/[\uff66-\uff9f]/u.test(item.str) &&
+      item.dir !== "ttb" &&
+      Math.abs(transform[1] ?? 0) > Math.abs(transform[0] ?? 0)
+        ? { hasSidewaysHalfwidthKatakana: true }
+        : {}),
     });
   });
 
@@ -328,6 +334,10 @@ function blockFromItems(
     y: direction === "vertical" ? (items[0]?.y ?? 0) : axisPosition,
     itemIds: items.flatMap((item) => item.sourceItemIds ?? [item.id]),
     fontSize: typicalFontSize,
+    ...(direction === "vertical" &&
+    items.some((item) => item.hasSidewaysHalfwidthKatakana)
+      ? { hasSidewaysHalfwidthKatakana: true }
+      : {}),
     ...(speakerLabel ? { speakerLabel } : {}),
   };
 }

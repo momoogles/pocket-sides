@@ -178,7 +178,7 @@ function renderLayoutAdjustment(renderBoundaryEditor: () => string): string {
   const reconciliationContext = getOcrReconciliationContext();
   const previews = rawPreviews?.map((page) => {
     const originalPage = originalPages.get(page.pageNumber);
-    return originalPage && Object.keys(corrections).length > 0
+    return originalPage
       ? mergeRecognizedPage(
           originalPage,
           page,

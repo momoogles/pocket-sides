@@ -30,6 +30,8 @@ export interface SourceBlock {
   visualGapAfter?: number;
   /** Approximate source font size, used to associate inline Latin letters by position. */
   fontSize?: number;
+  /** 縦書きの列に、横組みを回転した半角カタカナが含まれるかを示します。 */
+  hasSidewaysHalfwidthKatakana?: boolean;
   /** Alternate spellings retained when a role suffix is isolated in an adjacent column. */
   speakerAliases?: string[];
   /** Role names that speak together on this line. */

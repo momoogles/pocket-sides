@@ -150,18 +150,22 @@ export function mergeRecognizedPage(
   const correctedRecognizedBlocks = new Map<string, SourceBlock>();
   const matchTolerance = sourceBlockMatchTolerance(sourcePage);
   const blocks = sourcePage.blocks.map((sourceBlock) => {
+    const preserveSidewaysText =
+      sourceBlock.hasSidewaysHalfwidthKatakana === true;
     if (
       sourceBlock.recognitionConfidence !== undefined ||
-      findUnusualCharacters([sourceBlock], {}).length === 0
+      (!preserveSidewaysText &&
+        findUnusualCharacters([sourceBlock], {}).length === 0)
     )
       return sourceBlock;
 
     let bestIndex = -1;
     let bestDistance = Number.POSITIVE_INFINITY;
+    let matchingLineCount = 0;
     availableLines.forEach((line, index) => {
       if (
         line.recognitionConfidence === undefined ||
-        line.recognitionConfidence < 20
+        (!preserveSidewaysText && line.recognitionConfidence < 20)
       )
         return;
       if (
@@ -174,6 +178,7 @@ export function mergeRecognizedPage(
         )
       )
         return;
+      matchingLineCount += 1;
       const distance =
         sourcePage.direction === "vertical"
           ? Math.abs(sourceBlock.x - line.x)
@@ -184,10 +189,18 @@ export function mergeRecognizedPage(
       }
     });
 
-    if (bestIndex < 0 || bestDistance > matchTolerance) return sourceBlock;
+    if (
+      bestIndex < 0 ||
+      bestDistance > matchTolerance ||
+      (preserveSidewaysText && matchingLineCount !== 1)
+    )
+      return sourceBlock;
 
     const recognizedBlock = availableLines.splice(bestIndex, 1)[0];
     if (!recognizedBlock) return sourceBlock;
+    // 縦書き用OCRが横向きの文字を誤読した行では、文字補完にもOCRを使いません。
+    const useSourceTextOnly =
+      preserveSidewaysText && (recognizedBlock.recognitionConfidence ?? 0) < 20;
     replacedBlockCount += 1;
     const correctedSourceBlock =
       applyCharacterCorrections([sourceBlock], characterCorrections)[0] ??
@@ -235,12 +248,14 @@ export function mergeRecognizedPage(
             });
           }
         : undefined;
-    const mergedTextWithCue = mergeReadableSourceText(
-      sourceText,
-      recognizedText,
-      onCharacterMapping,
-      characterCorrections,
-    );
+    const mergedTextWithCue = useSourceTextOnly
+      ? sourceText
+      : mergeReadableSourceText(
+          sourceText,
+          recognizedText,
+          onCharacterMapping,
+          characterCorrections,
+        );
     const mergedText = normalizeScriptText(
       speakerLabel
         ? stripDuplicateSpeakerCue(
@@ -253,12 +268,14 @@ export function mergeRecognizedPage(
     const mergedRawText = normalizeScriptText(
       speakerLabel
         ? `${speakerLabel}${mergedTextWithCue}`
-        : mergeReadableSourceText(
-            correctedSourceBlock.rawText,
-            normalizeScriptPunctuation(recognizedBlock.rawText, speakerLabel),
-            undefined,
-            characterCorrections,
-          ),
+        : useSourceTextOnly
+          ? correctedSourceBlock.text
+          : mergeReadableSourceText(
+              correctedSourceBlock.rawText,
+              normalizeScriptPunctuation(recognizedBlock.rawText, speakerLabel),
+              undefined,
+              characterCorrections,
+            ),
     );
 
     const mergedBlock: SourceBlock = {
@@ -273,6 +290,7 @@ export function mergeRecognizedPage(
       rawText: mergedRawText,
       text: mergedText,
       speakerLabel,
+      ...(preserveSidewaysText ? { hasSidewaysHalfwidthKatakana: true } : {}),
       ...(sourceBlock.speakerAliases
         ? { speakerAliases: sourceBlock.speakerAliases }
         : {}),
@@ -283,6 +301,7 @@ export function mergeRecognizedPage(
         rawText: mergedRawText,
         text: mergedText,
         speakerLabel,
+        ...(preserveSidewaysText ? { hasSidewaysHalfwidthKatakana: true } : {}),
         ...(sourceBlock.speakerAliases
           ? { speakerAliases: sourceBlock.speakerAliases }
           : {}),

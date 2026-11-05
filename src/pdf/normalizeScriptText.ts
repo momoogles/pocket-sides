@@ -12,6 +12,7 @@ const SMALL_YOON_FOR_FULL: Record<string, string> = {
 export function normalizeScriptText(value: string): string {
   return value
     .trim()
+    .replace(/([\uff66-\uff9f])\s+(?=[\uff66-\uff9f])/gu, "$1")
     .replace(
       /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー0-9０-９])\s+(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}々ヶヵー0-9０-９])/gu,
       "$1",

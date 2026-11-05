@@ -1,1 +1,1 @@
-export const OCR_RECOGNITION_VERSION = 17;
+export const OCR_RECOGNITION_VERSION = 18;
