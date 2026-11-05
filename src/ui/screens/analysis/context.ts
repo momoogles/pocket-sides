@@ -2,7 +2,11 @@ import type { RoleCandidate } from "../../../pdf/roleCandidate";
 import { roleIdForName } from "../../../pdf/roleIdForName";
 import { appRoot as root, appState as state } from "../../appRoot";
 import { goToPreviewPage } from "../../pdfPreview";
-import { renderApp, scrollToSourceReview } from "../../renderApp";
+import {
+  renderApp,
+  scrollToAnalysisPanel,
+  scrollToSourceReview,
+} from "../../renderApp";
 import { syncEditorHighlights } from "../../renderState";
 import {
   applyScriptEditor,
@@ -69,7 +73,8 @@ export function bindAnalysisContext(signal: AbortSignal): void {
             !root.pdfWorkspace.analysis.ocrBusy &&
             root.pdfWorkspace.analysis.layoutPreview
           ) {
-            replaceReadingPages(root.pdfWorkspace.analysis.layoutPreview);
+            replaceReadingPages(root.pdfWorkspace.analysis.layoutPreview, true);
+            scrollToAnalysisPanel("layout-adjustment-panel");
           }
           break;
         case "discard-ocr-layout":

@@ -1,6 +1,7 @@
 // Infer speaker labels from OCR line spacing and quotation marks.
 import { normalizeScriptText } from "./normalizeScriptText";
 import type { OcrLine } from "./ocrPageLayout";
+import { normalizeAlias } from "./speakerNames";
 
 const OCR_ROLE_NAME_CHARACTER = String.raw`(?:(?![\u3400-\u4dbf])[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Letter}\p{Number}々ヶヵー])`;
 
@@ -44,10 +45,15 @@ const OCR_OPENING_MARKERS = new Set([
 
 export function findOcrSpeakerLabel(
   line: OcrLine,
+  knownSpeakerAliasKeys: ReadonlySet<string> = new Set(),
 ): { label: string; evidence: "layout" | "quotation" } | undefined {
   const normalizedText = normalizeScriptText(line.text);
+  // A gap before bracketed text can be stage-direction spacing, not a speaker cue.
+  if (/[「『“"]/u.test(normalizedText))
+    return findQuotedOcrSpeakerLabel(normalizedText, knownSpeakerAliasKeys);
   const words = line.words ?? [];
-  if (words.length < 2) return findQuotedOcrSpeakerLabel(normalizedText);
+  if (words.length < 2)
+    return findQuotedOcrSpeakerLabel(normalizedText, knownSpeakerAliasKeys);
   const heights = words.map((word) => word.bbox.y1 - word.bbox.y0);
   const typicalHeight = median(heights);
   const gapThreshold = Math.max(10, typicalHeight * 1.8);
@@ -57,7 +63,7 @@ export function findOcrSpeakerLabel(
     label += words[index].text;
     const normalizedLabel = normalizeScriptText(label);
     if (!OCR_ROLE_LABEL.test(normalizedLabel))
-      return findQuotedOcrSpeakerLabel(normalizedText);
+      return findQuotedOcrSpeakerLabel(normalizedText, knownSpeakerAliasKeys);
     const current = words[index].bbox;
     const next = words[index + 1].bbox;
     const gap = Math.max(next.x0 - current.x1, current.x0 - next.x1, 0);
@@ -78,11 +84,12 @@ export function findOcrSpeakerLabel(
       return { label: normalizedLabel, evidence: "layout" };
     }
   }
-  return findQuotedOcrSpeakerLabel(normalizedText);
+  return findQuotedOcrSpeakerLabel(normalizedText, knownSpeakerAliasKeys);
 }
 
 function findQuotedOcrSpeakerLabel(
   normalizedText: string,
+  knownSpeakerAliasKeys: ReadonlySet<string>,
 ): { label: string; evidence: "quotation" } | undefined {
   for (let index = 1; index < normalizedText.length; ) {
     const character = String.fromCodePoint(
@@ -90,7 +97,11 @@ function findQuotedOcrSpeakerLabel(
     );
     if (OCR_OPENING_MARKERS.has(character)) {
       const label = normalizedText.slice(0, index).trim();
-      if (OCR_ROLE_LABEL.test(label)) return { label, evidence: "quotation" };
+      if (
+        OCR_ROLE_LABEL.test(label) &&
+        knownSpeakerAliasKeys.has(normalizeAlias(label))
+      )
+        return { label, evidence: "quotation" };
     }
     index += character.length;
   }
@@ -98,7 +109,11 @@ function findQuotedOcrSpeakerLabel(
     `^(${OCR_ROLE_LABEL_CHARACTER}{1,24})(?=[「『“"])`,
     "u",
   ).exec(normalizedText);
-  if (quotedLabel?.[1] && OCR_ROLE_LABEL.test(quotedLabel[1]))
+  if (
+    quotedLabel?.[1] &&
+    OCR_ROLE_LABEL.test(quotedLabel[1]) &&
+    knownSpeakerAliasKeys.has(normalizeAlias(quotedLabel[1]))
+  )
     return { label: quotedLabel[1], evidence: "quotation" };
 
   return undefined;

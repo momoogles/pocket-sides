@@ -35,6 +35,7 @@ export interface AnalysisState {
   ocrStatus: string;
   ocrErrors: Record<"text" | "layout", string>;
   textOcrCompletion: { pageCount: number; replacedPages: number } | null;
+  layoutOcrCompletion: { pageCount: number } | null;
   ocrPurpose: "layout" | "text";
   layoutPreview: SourcePage[] | null;
   ocrAnalysisComplete: boolean;
@@ -95,6 +96,7 @@ export function createPdfWorkspaceState(): PdfWorkspaceState {
       ocrStatus: "",
       ocrErrors: { text: "", layout: "" },
       textOcrCompletion: null,
+      layoutOcrCompletion: null,
       ocrPurpose: "layout",
       layoutPreview: null,
       ocrAnalysisComplete: false,

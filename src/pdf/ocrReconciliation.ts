@@ -113,6 +113,7 @@ export function mergeRecognizedPage(
   context: OcrReconciliationContext,
   characterMappingEvidence?: CharacterMappingEvidence[],
   characterCorrections: Readonly<Record<string, string>> = {},
+  preserveRecognizedLayout = false,
 ): SourcePage {
   const { recoveredOpeningMarkers, roles } = context;
   if (sourcePage.blocks.length === 0) {
@@ -146,6 +147,7 @@ export function mergeRecognizedPage(
       ),
   );
   let replacedBlockCount = 0;
+  const correctedRecognizedBlocks = new Map<string, SourceBlock>();
   const matchTolerance = sourceBlockMatchTolerance(sourcePage);
   const blocks = sourcePage.blocks.map((sourceBlock) => {
     if (
@@ -259,7 +261,7 @@ export function mergeRecognizedPage(
           ),
     );
 
-    return {
+    const mergedBlock: SourceBlock = {
       ...recognizedBlock,
       id: sourceBlock.id,
       orderOnPage: sourceBlock.orderOnPage,
@@ -275,9 +277,32 @@ export function mergeRecognizedPage(
         ? { speakerAliases: sourceBlock.speakerAliases }
         : {}),
     };
+    if (preserveRecognizedLayout) {
+      correctedRecognizedBlocks.set(recognizedBlock.id, {
+        ...recognizedBlock,
+        rawText: mergedRawText,
+        text: mergedText,
+        speakerLabel,
+        ...(sourceBlock.speakerAliases
+          ? { speakerAliases: sourceBlock.speakerAliases }
+          : {}),
+      });
+    }
+    return mergedBlock;
   });
 
-  if (replacedBlockCount === 0) return sourcePage;
+  if (replacedBlockCount === 0)
+    return preserveRecognizedLayout ? recognizedPage : sourcePage;
+  if (preserveRecognizedLayout) {
+    return {
+      ...recognizedPage,
+      blocks: recognizedPage.blocks.map(
+        (block) => correctedRecognizedBlocks.get(block.id) ?? block,
+      ),
+      textSource: "mixed",
+      recognitionVersion: OCR_RECOGNITION_VERSION,
+    };
+  }
   return {
     ...sourcePage,
     blocks,

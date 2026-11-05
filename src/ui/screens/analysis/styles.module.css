@@ -223,7 +223,8 @@
   line-height: 1.5;
 }
 
-.root :global(.glyph-panel) > :global(.panel-heading) {
+.root :global(.glyph-panel) > :global(.panel-heading),
+.root :global(.layout-adjustment-panel) > :global(.panel-heading) {
   margin-bottom: 0.5rem;
 }
 
@@ -419,6 +420,17 @@
 }
 
 @media (max-width: 640px) {
+  .root :global(.panel-heading) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  .root :global(.panel-heading) > div:first-child {
+    width: 100%;
+    min-width: 0;
+  }
+
   .root :global(.file-summary-panel) {
     align-items: flex-start;
     flex-wrap: wrap;
@@ -435,6 +447,35 @@
 
   .root :global(.manual-role-form) {
     grid-template-columns: 1fr;
+  }
+
+  .root :global(.page-navigation) {
+    flex-wrap: wrap;
+  }
+
+  .root :global(.page-navigation) label {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .root :global(.role-card-top),
+  .root :global(.role-card-meta) {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .root :global(.role-card-top) :global(.remove-role-button) {
+    margin-inline-start: auto;
+  }
+
+  .root :global(.image-analysis-progress-meter) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+
+  .root :global(.image-analysis-progress-meter) > span {
+    padding: 0;
+    white-space: normal;
   }
 }
 

@@ -24,6 +24,7 @@ export interface LocalOcrReader {
     document: PDFDocumentProxy,
     pageNumber: number,
     direction: ReadingDirection,
+    knownSpeakerAliasKeys?: ReadonlySet<string>,
   ) => Promise<SourcePage>;
   terminate: () => Promise<void>;
 }
@@ -73,7 +74,12 @@ export async function createLocalOcrReader(
   }
 
   return {
-    async readPage(documentProxy, pageNumber, direction) {
+    async readPage(
+      documentProxy,
+      pageNumber,
+      direction,
+      knownSpeakerAliasKeys,
+    ) {
       const page = await documentProxy.getPage(pageNumber);
       const pageViewport = page.getViewport({ scale: 1 });
       const viewport = page.getViewport({ scale: OCR_SCALE });
@@ -183,7 +189,9 @@ export async function createLocalOcrReader(
               return [];
             }
             const speaker =
-              direction === "vertical" ? findOcrSpeakerLabel(line) : undefined;
+              direction === "vertical"
+                ? findOcrSpeakerLabel(line, knownSpeakerAliasKeys)
+                : undefined;
             const speakerLabel = speaker?.label;
             const normalizedText = normalizeScriptPunctuation(
               line.text,

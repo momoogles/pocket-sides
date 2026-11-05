@@ -34,6 +34,28 @@ export function usableRoleCandidates(): RoleCandidate[] {
     }));
 }
 
+export function knownOcrSpeakerAliasKeys(): ReadonlySet<string> {
+  const layoutAliases = collectBlocks(
+    root.pdfWorkspace.script.originalPages,
+  ).flatMap((block) => {
+    if (
+      !block.speakerLabel ||
+      block.speakerEvidence === "quotation" ||
+      !isPlausibleSpeakerLabel(block.speakerLabel)
+    )
+      return [];
+    return [block.speakerLabel, ...(block.speakerAliases ?? [])];
+  });
+  const trustedRoleAliases = root.pdfWorkspace.script.roles
+    .filter((role) => role.manual)
+    .flatMap((role) => role.aliases);
+  return new Set(
+    [...layoutAliases, ...trustedRoleAliases]
+      .map(normalizeAlias)
+      .filter(Boolean),
+  );
+}
+
 export function getRecoveredOpeningMarkers(): ReadonlySet<string> {
   return cacheForScriptDocument(root.pdfWorkspace.script).openingMarkers;
 }

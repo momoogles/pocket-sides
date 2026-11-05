@@ -231,4 +231,14 @@ export function scrollToSourceReview(): void {
   );
 }
 
+export function scrollToAnalysisPanel(
+  panelId: "glyph-panel" | "layout-adjustment-panel",
+): void {
+  requestAnimationFrame(() =>
+    document
+      .getElementById(panelId)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+  );
+}
+
 setRenderCallback(renderApp);

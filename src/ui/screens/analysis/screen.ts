@@ -6,7 +6,6 @@ import {
   isOcrRecognizedPage,
   mergeRecognizedPage,
 } from "../../../pdf/ocrReconciliation";
-import type { PdfWorkspaceState } from "../../../pdf/pdfWorkspace";
 import { cueAtStart } from "../../../pdf/quoteMarkers";
 import type { RoleCandidate } from "../../../pdf/roleCandidate";
 import {
@@ -148,19 +147,16 @@ function renderReadingWarning(
     </section>`;
 }
 
-function renderImageAnalysisProgress(
-  purpose: PdfWorkspaceState["analysis"]["ocrPurpose"],
-): string {
-  return root.pdfWorkspace.analysis.ocrBusy &&
-    root.pdfWorkspace.analysis.ocrPurpose === purpose
+function renderImageAnalysisProgress(): string {
+  return root.pdfWorkspace.analysis.ocrBusy
     ? `
     <div class="image-analysis-progress" role="status">
-      <p id="image-analysis-progress-label" aria-live="polite">${escapeHtml(root.pdfWorkspace.analysis.ocrStatus || "画像解析の準備をしています")}</p>
+      <p class="image-analysis-progress-label" aria-live="polite">${escapeHtml(root.pdfWorkspace.analysis.ocrStatus || "画像解析の準備をしています")}</p>
       <div class="image-analysis-progress-meter">
         <div class="progress-shell" role="progressbar" aria-label="画像解析の進捗" aria-valuemin="0" aria-valuemax="${root.pdfWorkspace.analysis.ocrTotal}" aria-valuenow="${root.pdfWorkspace.analysis.ocrProgress}">
-          <div class="progress-bar" id="image-analysis-progress-bar" style="width:${root.pdfWorkspace.analysis.ocrTotal ? Math.round((root.pdfWorkspace.analysis.ocrProgress / root.pdfWorkspace.analysis.ocrTotal) * 100) : 0}%"></div>
+          <div class="progress-bar image-analysis-progress-bar" style="width:${root.pdfWorkspace.analysis.ocrTotal ? Math.round((root.pdfWorkspace.analysis.ocrProgress / root.pdfWorkspace.analysis.ocrTotal) * 100) : 0}%"></div>
         </div>
-        <span id="image-analysis-progress-count" aria-hidden="true">処理済み ${root.pdfWorkspace.analysis.ocrProgress} / ${root.pdfWorkspace.analysis.ocrTotal}ページ</span>
+        <span class="image-analysis-progress-count" aria-hidden="true">処理済み ${root.pdfWorkspace.analysis.ocrProgress} / ${root.pdfWorkspace.analysis.ocrTotal}ページ</span>
       </div>
       <button class="text-button" data-action="cancel-ocr">画像解析を中止する</button>
     </div>`
@@ -168,23 +164,47 @@ function renderImageAnalysisProgress(
 }
 
 function renderLayoutAdjustment(renderBoundaryEditor: () => string): string {
-  const previews = root.pdfWorkspace.analysis.layoutPreview;
+  const rawPreviews = root.pdfWorkspace.analysis.layoutPreview;
+  const corrections = {
+    ...root.pdfWorkspace.analysis.textOcrPreview?.corrections,
+    ...root.pdfWorkspace.script.corrections,
+  };
+  const originalPages = new Map(
+    root.pdfWorkspace.script.originalPages.map((page) => [
+      page.pageNumber,
+      page,
+    ]),
+  );
+  const reconciliationContext = getOcrReconciliationContext();
+  const previews = rawPreviews?.map((page) => {
+    const originalPage = originalPages.get(page.pageNumber);
+    return originalPage && Object.keys(corrections).length > 0
+      ? mergeRecognizedPage(
+          originalPage,
+          page,
+          reconciliationContext,
+          undefined,
+          corrections,
+          true,
+        )
+      : page;
+  });
   const preview =
     previews?.find(
       (page) => page.pageNumber === root.pdfWorkspace.analysis.previewPage,
     ) ?? previews?.[0];
   return `
-    <section class="panel layout-adjustment-panel" aria-labelledby="layout-adjustment-heading">
+    <section id="layout-adjustment-panel" class="panel layout-adjustment-panel" aria-labelledby="layout-adjustment-heading">
       <div class="panel-heading"><div><h2 id="layout-adjustment-heading">区切りの調整</h2><p>セリフを分ける位置や、話す役を調整します。</p></div></div>
       <div class="image-analysis-section">
         <h3 class="adjustment-mode-title"><span>おすすめ</span>画像解析して調整する</h3>
         <p class="panel-footnote">全ページを画像解析し、読み順やセリフの区切りを判定し直します。</p>
         <div class="image-analysis-actions">
           <button class="secondary-button" data-action="preview-ocr-layout" ${root.pdfWorkspace.analysis.ocrBusy || preview || root.pdfWorkspace.analysis.ocrAnalysisComplete ? "disabled" : ""}>${root.pdfWorkspace.analysis.ocrAnalysisComplete ? "画像解析は完了しました" : "画像解析する"}</button>
-          ${root.pdfWorkspace.analysis.ocrAnalysisComplete && !preview ? `<button class="text-button" data-action="preview-ocr-layout" ${root.pdfWorkspace.analysis.ocrBusy ? "disabled" : ""}>解析結果を確認する</button>` : ""}
+          ${root.pdfWorkspace.analysis.ocrAnalysisComplete && !preview && !root.pdfWorkspace.analysis.layoutOcrCompletion ? `<button class="text-button" data-action="preview-ocr-layout" ${root.pdfWorkspace.analysis.ocrBusy ? "disabled" : ""}>もう一度画像解析する</button>` : ""}
         </div>
         <p class="panel-footnote">画像解析はこの端末内で行い、PDFや読み取り結果をサーバーに送信しません。</p>
-        ${renderImageAnalysisProgress("layout")}
+        ${renderImageAnalysisProgress()}
         ${
           preview && previews
             ? `
@@ -207,6 +227,7 @@ function renderLayoutAdjustment(renderBoundaryEditor: () => string): string {
           </div>`
             : ""
         }
+        ${root.pdfWorkspace.analysis.layoutOcrCompletion ? `<div class="image-analysis-completion" role="status"><strong>画像解析の結果を適用しました</strong><p>${root.pdfWorkspace.analysis.layoutOcrCompletion.pageCount}ページの解析結果を適用しました。必要に応じて「手動で調整する」で区切りや役名を調整できます。</p></div>` : ""}
         ${root.pdfWorkspace.analysis.ocrErrors.layout ? `<div class="alert alert-warning image-analysis-error" role="alert">${escapeHtml(root.pdfWorkspace.analysis.ocrErrors.layout)}</div>` : ""}
       </div>
       <details id="manual-boundary-editor" class="manual-adjustment">
@@ -281,7 +302,7 @@ function renderCorrectionPanel(
     })
     .join("");
   return `
-      <section class="panel glyph-panel" aria-labelledby="glyph-panel-heading">
+      <section id="glyph-panel" class="panel glyph-panel" aria-labelledby="glyph-panel-heading">
         <div class="panel-heading"><div><h2 id="glyph-panel-heading">文字の置換</h2><p>文字化けや、誤って読み取られた文字を置き換えます。</p></div>${glyphs.length > 0 ? `<span class="count-pill">${glyphs.length}種類 · 未設定 ${unresolved}種類</span>` : ""}</div>
         <div class="image-analysis-section">
           <h3 class="adjustment-mode-title"><span>おすすめ</span>画像解析して置換する</h3>
@@ -292,7 +313,7 @@ function renderCorrectionPanel(
             ${root.pdfWorkspace.script.cachedOcrPages.length > 0 ? `<button class="text-button" data-action="use-previous-image-analysis" ${root.pdfWorkspace.analysis.ocrBusy || root.pdfWorkspace.analysis.layoutPreview ? "disabled" : ""}>前回の画像解析結果を適用する（${root.pdfWorkspace.script.cachedOcrPages.length}ページ）</button>` : ""}
           </div>
           <p class="panel-footnote">画像解析はこの端末内で行い、PDFや読み取り結果をサーバーに送信しません。</p>
-          ${renderImageAnalysisProgress("text")}
+          ${renderImageAnalysisProgress()}
           ${renderTextOcrPreview()}
           ${
             root.pdfWorkspace.analysis.textOcrCompletion

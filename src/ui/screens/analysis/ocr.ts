@@ -18,10 +18,11 @@ import type { PdfWorkspaceState } from "../../../pdf/pdfWorkspace";
 import type { SourcePage } from "../../../pdf/sourcePage";
 import { appRoot as root } from "../../appRoot";
 import { notify } from "../../notifications";
-import { renderApp } from "../../renderApp";
+import { renderApp, scrollToAnalysisPanel } from "../../renderApp";
 import {
   blocks,
   getOcrReconciliationContext,
+  knownOcrSpeakerAliasKeys,
 } from "../../shared/correctedScriptBlocks";
 import { refreshAutomaticRoles } from "../../shared/scriptRoles";
 
@@ -77,6 +78,7 @@ export function applyTextOcrPreview(): void {
   root.pdfWorkspace.practice.currentTargetIndex = 0;
   refreshAutomaticRoles();
   renderApp();
+  scrollToAnalysisPanel("glyph-panel");
 }
 
 export async function readWithOcr(
@@ -105,6 +107,7 @@ export async function readWithOcr(
   root.pdfWorkspace.analysis.ocrTotal = candidates.length;
   root.pdfWorkspace.analysis.ocrStatus = "画像解析の準備をしています";
   root.pdfWorkspace.analysis.ocrErrors[purpose] = "";
+  if (adjustLayout) root.pdfWorkspace.analysis.layoutOcrCompletion = null;
   renderApp();
 
   let reader: Awaited<ReturnType<typeof createLocalOcrReader>> | null = null;
@@ -115,6 +118,7 @@ export async function readWithOcr(
   const recognizedPageCache = recognizedPageCacheFor(document);
   const layoutResults: SourcePage[] = [];
   const reconciliationContext = getOcrReconciliationContext();
+  const knownSpeakerAliasKeys = knownOcrSpeakerAliasKeys();
 
   try {
     for (const sourcePage of candidates) {
@@ -138,6 +142,7 @@ export async function readWithOcr(
             document,
             sourcePage.pageNumber,
             sourcePage.direction,
+            knownSpeakerAliasKeys,
           );
           recognizedPageCache.set(sourcePage.pageNumber, recognizedPage);
         }
@@ -260,43 +265,82 @@ function readableOcrStatus(status: string): string {
 }
 
 export function updateOcrProgress(): void {
-  const label = document.querySelector<HTMLElement>(
-    "#image-analysis-progress-label",
+  const labels = document.querySelectorAll<HTMLElement>(
+    ".image-analysis-progress-label",
   );
-  const count = document.querySelector<HTMLElement>(
-    "#image-analysis-progress-count",
+  const counts = document.querySelectorAll<HTMLElement>(
+    ".image-analysis-progress-count",
   );
-  const bar = document.querySelector<HTMLDivElement>(
-    "#image-analysis-progress-bar",
+  const bars = document.querySelectorAll<HTMLDivElement>(
+    ".image-analysis-progress-bar",
   );
-  if (label) label.textContent = root.pdfWorkspace.analysis.ocrStatus;
-  if (count)
+  labels.forEach((label) => {
+    label.textContent = root.pdfWorkspace.analysis.ocrStatus;
+  });
+  counts.forEach((count) => {
     count.textContent = `処理済み ${root.pdfWorkspace.analysis.ocrProgress} / ${root.pdfWorkspace.analysis.ocrTotal}ページ`;
-  if (bar) {
-    const percent =
-      root.pdfWorkspace.analysis.ocrTotal > 0
-        ? Math.round(
-            (root.pdfWorkspace.analysis.ocrProgress /
-              root.pdfWorkspace.analysis.ocrTotal) *
-              100,
-          )
-        : 0;
+  });
+  const percent =
+    root.pdfWorkspace.analysis.ocrTotal > 0
+      ? Math.round(
+          (root.pdfWorkspace.analysis.ocrProgress /
+            root.pdfWorkspace.analysis.ocrTotal) *
+            100,
+        )
+      : 0;
+  bars.forEach((bar) => {
     bar.style.width = `${percent}%`;
     const progress = bar.closest<HTMLElement>("[role='progressbar']");
     progress?.setAttribute(
       "aria-valuenow",
       String(root.pdfWorkspace.analysis.ocrProgress),
     );
-  }
+  });
 }
 
-export function replaceReadingPages(pages: SourcePage[]): void {
+export function replaceReadingPages(
+  pages: SourcePage[],
+  layoutOcrApplied = false,
+): void {
   const restoresPdfText = pages.some((page) => page.textSource === "pdf-text");
   if (restoresPdfText) {
     root.pdfWorkspace.analysis.textOcrCompletion = null;
+    root.pdfWorkspace.analysis.layoutOcrCompletion = null;
     root.pdfWorkspace.analysis.ocrErrors.text = "";
   }
-  const replacements = new Map(pages.map((page) => [page.pageNumber, page]));
+  if (layoutOcrApplied)
+    root.pdfWorkspace.analysis.layoutOcrCompletion = {
+      pageCount: pages.length,
+    };
+  const originalPages = new Map(
+    root.pdfWorkspace.script.originalPages.map((page) => [
+      page.pageNumber,
+      page,
+    ]),
+  );
+  const corrections = {
+    ...root.pdfWorkspace.analysis.textOcrPreview?.corrections,
+    ...root.pdfWorkspace.script.corrections,
+  };
+  const reconciliationContext = getOcrReconciliationContext();
+  const replacements = new Map(
+    pages.map((page) => {
+      const originalPage = originalPages.get(page.pageNumber);
+      const replacement =
+        originalPage &&
+        (page.textSource === "ocr" || page.textSource === "mixed")
+          ? mergeRecognizedPage(
+              originalPage,
+              page,
+              reconciliationContext,
+              undefined,
+              corrections,
+              true,
+            )
+          : page;
+      return [page.pageNumber, replacement];
+    }),
+  );
   const replacedBlocks = blocks().filter((block) =>
     replacements.has(block.pageNumber),
   );
@@ -365,6 +409,7 @@ export function applyCachedImageAnalysis(showNotification = true): void {
     );
   refreshAutomaticRoles();
   renderApp();
+  scrollToAnalysisPanel("glyph-panel");
 }
 
 export function restoreSavedCorrections(): void {
