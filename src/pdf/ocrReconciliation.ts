@@ -13,10 +13,18 @@ import {
   normalizeScriptText,
 } from "./normalizeScriptText";
 import { OCR_RECOGNITION_VERSION } from "./ocrRecognitionVersion";
-import { cueAtStart, stripDuplicateSpeakerCue } from "./quoteMarkers";
+import {
+  cueAtStart,
+  inferRecoveredClosingMarkers,
+  stripDuplicateSpeakerCue,
+} from "./quoteMarkers";
 import type { RoleCandidate } from "./roleCandidate";
 import type { SourceBlock, SourcePage } from "./sourcePage";
 import { normalizeAlias } from "./speakerNames";
+import {
+  isClosingQuoteCharacter,
+  isUnreadableCharacter,
+} from "./unreadableCharacter";
 
 export interface OcrReconciliationContext {
   recoveredOpeningMarkers: ReadonlySet<string>;
@@ -310,24 +318,131 @@ export function mergeRecognizedPage(
     return mergedBlock;
   });
 
-  if (replacedBlockCount === 0)
-    return preserveRecognizedLayout ? recognizedPage : sourcePage;
   if (preserveRecognizedLayout) {
+    const correctedBlocks = recognizedPage.blocks.map(
+      (block) => correctedRecognizedBlocks.get(block.id) ?? block,
+    );
+    const restoredBlocks = restoreMissingDialogueEndings(
+      sourcePage,
+      correctedBlocks,
+      context,
+      characterCorrections,
+      matchTolerance,
+    );
+    if (replacedBlockCount === 0 && restoredBlocks === correctedBlocks)
+      return recognizedPage;
     return {
       ...recognizedPage,
-      blocks: recognizedPage.blocks.map(
-        (block) => correctedRecognizedBlocks.get(block.id) ?? block,
-      ),
+      blocks: restoredBlocks,
       textSource: "mixed",
       recognitionVersion: OCR_RECOGNITION_VERSION,
     };
   }
+  if (replacedBlockCount === 0) return sourcePage;
   return {
     ...sourcePage,
     blocks,
     textSource: "mixed",
     recognitionVersion: OCR_RECOGNITION_VERSION,
   };
+}
+
+/** OCRで列・行ごと欠落したセリフ末尾を、直前の対応するOCRブロックの後に補います。 */
+function restoreMissingDialogueEndings(
+  sourcePage: SourcePage,
+  recognizedBlocks: SourceBlock[],
+  context: OcrReconciliationContext,
+  characterCorrections: Readonly<Record<string, string>>,
+  matchTolerance: number,
+): SourceBlock[] {
+  const closingMarkers = inferRecoveredClosingMarkers(
+    sourcePage.blocks,
+    context.recoveredOpeningMarkers,
+  );
+  const afterBlock = new Map<string, SourceBlock>();
+  const position = (block: SourceBlock) =>
+    sourcePage.direction === "vertical" ? block.x : block.y;
+
+  sourcePage.blocks.forEach((sourceBlock, index) => {
+    const previousSource = sourcePage.blocks[index - 1];
+    if (
+      !previousSource ||
+      sourceBlock.speakerLabel ||
+      sourceBlock.recognitionConfidence !== undefined ||
+      cueAtStart(sourceBlock.rawText, context.recoveredOpeningMarkers)
+    )
+      return;
+
+    const corrected = applyCharacterCorrections(
+      [sourceBlock],
+      characterCorrections,
+    )[0];
+    if (!corrected) return;
+    let text = corrected.text.trim();
+    const ending = Array.from(text).at(-1) ?? "";
+    if (
+      closingMarkers.has(ending) &&
+      !context.recoveredOpeningMarkers.has(ending)
+    )
+      text = `${text.slice(0, -ending.length)}」`;
+    if (
+      !isClosingQuoteCharacter(Array.from(text).at(-1) ?? "") ||
+      Array.from(text).some(isUnreadableCharacter)
+    )
+      return;
+
+    const sourcePosition = position(sourceBlock);
+    // 隣の列・行をまとめたOCR結果がある場合は、重複を避けるため補いません。
+    const alreadyCovered = recognizedBlocks.some((block) => {
+      if (Math.abs(position(block) - sourcePosition) <= matchTolerance)
+        return true;
+      const bounds = block.recognitionBounds;
+      if (!bounds) return false;
+      const min =
+        sourcePage.direction === "vertical" ? bounds.xMin : bounds.yMin;
+      const max =
+        sourcePage.direction === "vertical" ? bounds.xMax : bounds.yMax;
+      return (
+        min - matchTolerance <= sourcePosition &&
+        sourcePosition <= max + matchTolerance
+      );
+    });
+    if (alreadyCovered) return;
+
+    const anchors = recognizedBlocks.filter(
+      (block) =>
+        (block.recognitionConfidence ?? 0) >= 60 &&
+        isSafeRecognitionMatch(
+          sourcePage,
+          previousSource,
+          block,
+          matchTolerance,
+          context,
+        ),
+    );
+    const anchor = anchors[0];
+    if (
+      anchors.length !== 1 ||
+      !anchor ||
+      isClosingQuoteCharacter(Array.from(anchor.text.trimEnd()).at(-1) ?? "")
+    )
+      return;
+    const next = recognizedBlocks[recognizedBlocks.indexOf(anchor) + 1];
+    if (
+      sourcePosition >= position(anchor) ||
+      (next && sourcePosition <= position(next))
+    )
+      return;
+    afterBlock.set(anchor.id, { ...sourceBlock, rawText: text, text });
+  });
+
+  if (afterBlock.size === 0) return recognizedBlocks;
+  return recognizedBlocks
+    .flatMap((block) => {
+      const restored = afterBlock.get(block.id);
+      return restored ? [block, restored] : [block];
+    })
+    .map((block, index) => ({ ...block, orderOnPage: index + 1 }));
 }
 
 function sourceBlockMatchTolerance(page: SourcePage): number {
